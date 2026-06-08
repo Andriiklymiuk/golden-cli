@@ -894,7 +894,7 @@ dependencies = [
 
 [[package]]
 name = "golden-cli"
-version = "2.0.8"
+version = "2.0.9"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -907,6 +907,7 @@ dependencies = [
  "owo-colors",
  "predicates",
  "ratatui",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",

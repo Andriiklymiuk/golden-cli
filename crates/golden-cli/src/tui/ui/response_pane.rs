@@ -57,7 +57,7 @@ pub fn draw_response(frame: &mut Frame, app: &App, area: Rect) {
         ])
     } else {
         Line::from(Span::styled(
-            "press s to send",
+            "press Enter or s to send",
             Style::default().fg(Color::DarkGray),
         ))
     };

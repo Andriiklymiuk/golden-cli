@@ -9,8 +9,16 @@ use ratatui::Frame;
 use crate::tui::app::App;
 
 pub fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let hints =
-        " a add  A folder  d del  r rename  c copy  s send  R run-all  / search  x env  ? help  q quit ";
+    use crate::tui::app::Pane;
+    // Short, context-aware hints — the essentials for the focused pane. The full
+    // keymap lives in `?` help so the bar stays readable on narrow terminals.
+    let hints = match app.focus {
+        Pane::Tree => {
+            " ↑↓ move · Enter send · e edit · a add · r run · Tab panes · ? help · ^C quit "
+        }
+        Pane::Request => " f field · e edit · Enter send · Tab panes · ? help · ^C quit ",
+        Pane::Response => " ↑↓ scroll · t tab · Tab panes · ? help · ^C quit ",
+    };
     // In Confirm mode, the confirm message overrides the status line.
     let left = if app.mode == crate::tui::app::Mode::Confirm {
         if let Some(c) = &app.confirm {

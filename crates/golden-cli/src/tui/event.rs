@@ -1,6 +1,6 @@
 //! Translate crossterm key events into App mutations.
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::tui::app::{App, Mode, Pane, ResponseTab};
 use crate::tui::worker::{spawn_send, RunHandle, RunMsg, SendHandle, SendMsg};
@@ -17,10 +17,14 @@ pub fn drain_send(app: &mut App, handle: &mut Option<SendHandle>) -> bool {
                     app.last_error = None;
                     app.response_scroll = 0;
                     app.response_tab = ResponseTab::Body;
+                    // Reveal the response (matters on narrow layouts that show one
+                    // detail pane at a time).
+                    app.focus = Pane::Response;
                 }
                 SendMsg::Done(Err(e)) => {
                     app.last_error = Some(e);
                     app.last_response = None;
+                    app.focus = Pane::Response;
                 }
                 SendMsg::Cancelled => {
                     app.status = "send cancelled".into();
@@ -45,6 +49,22 @@ pub fn drain_run(app: &mut App, handle: &mut Option<RunHandle>) {
     }
 }
 
+/// Fire the currently-selected request (shared by `s`, `Enter`, and chord-Enter).
+fn send_current(app: &mut App, send_handle: &mut Option<SendHandle>) {
+    if let Some(req) = app.current_request().cloned() {
+        app.sending = true;
+        app.status = "sending\u{2026}".into();
+        let vars = app.vars_map();
+        *send_handle = Some(spawn_send(
+            req,
+            vars,
+            golden_core::http::HttpConfig::default(),
+        ));
+    } else {
+        app.status = "select a request first".into();
+    }
+}
+
 /// Apply one key event to the app.
 pub fn handle_key(
     app: &mut App,
@@ -53,6 +73,14 @@ pub fn handle_key(
     run_handle: &mut Option<RunHandle>,
     workspace: &std::path::Path,
 ) {
+    // Ctrl+C always quits, from any mode. In raw mode the terminal does NOT turn
+    // Ctrl+C into a signal, so the app must handle it — otherwise it looks frozen.
+    // This is the universal escape hatch (Esc only closes modals).
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        app.should_quit = true;
+        return;
+    }
+
     // Esc closes any modal overlay (search mode also clears the query;
     // edit mode discards the buffer).
     if key.code == KeyCode::Esc && app.mode != Mode::Normal {
@@ -190,6 +218,28 @@ pub fn handle_key(
     if app.mode != Mode::Normal {
         return;
     }
+
+    // Ctrl+D = duplicate the selected item (works from any pane). Intercept before
+    // the match so it doesn't fall through to `d` (= delete in the tree pane).
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('d') {
+        if app.current_row().is_some() {
+            app.start_duplicate();
+        } else {
+            app.status = "nothing selected".into();
+        }
+        return;
+    }
+    // Ctrl/Cmd/Alt+Enter = send from anywhere, for terminals that report the chord.
+    // (Plain Enter on a request row also sends — see the match below.)
+    if key.code == KeyCode::Enter
+        && key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER | KeyModifiers::ALT)
+    {
+        send_current(app, send_handle);
+        return;
+    }
+
     match key.code {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Char('j') | KeyCode::Down => match app.focus {
@@ -205,21 +255,16 @@ pub fn handle_key(
         KeyCode::Char('g') => app.select_first(),
         KeyCode::Char('G') => app.select_last(),
         KeyCode::Tab => app.cycle_pane(),
-        KeyCode::Enter => app.toggle_collapse(),
-        KeyCode::Char('s') => {
-            if let Some(req) = app.current_request().cloned() {
-                app.sending = true;
-                app.status = "sending\u{2026}".into();
-                let vars = app.vars_map();
-                *send_handle = Some(spawn_send(
-                    req,
-                    vars,
-                    golden_core::http::HttpConfig::default(),
-                ));
+        // Enter on a request = send it (the intuitive gesture); on a folder/
+        // collection = expand/collapse.
+        KeyCode::Enter => {
+            if app.current_request().is_some() {
+                send_current(app, send_handle);
             } else {
-                app.status = "select a request first".into();
+                app.toggle_collapse();
             }
         }
+        KeyCode::Char('s') => send_current(app, send_handle),
         KeyCode::Char('c') => {
             if app.focus == Pane::Tree {
                 // `c` in the tree pane = duplicate (copy) the selected item.
@@ -360,6 +405,63 @@ mod tests {
         { "name": "ping", "request": { "method": "GET", "url": "{{base}}/ping" } }
       ]
     }"#;
+
+    #[test]
+    fn ctrl_c_quits_from_any_mode() {
+        for mode in [
+            crate::tui::app::Mode::Normal,
+            crate::tui::app::Mode::Edit,
+            crate::tui::app::Mode::Search,
+            crate::tui::app::Mode::Prompt,
+        ] {
+            let label = format!("{mode:?}");
+            let mut app = make_app(J);
+            app.mode = mode;
+            handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                &mut None,
+                &mut None,
+                std::path::Path::new("/tmp"),
+            );
+            assert!(app.should_quit, "Ctrl+C should quit from mode {label}");
+        }
+    }
+
+    #[test]
+    fn enter_on_request_row_sends() {
+        let (mut app, _dir) = make_app_with_file(J_FLAT);
+        app.selected = 1; // the "ping" request row
+        let mut handle: Option<SendHandle> = None;
+        handle_key(
+            &mut app,
+            key(KeyCode::Enter),
+            &mut handle,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert!(app.sending, "Enter on a request should start a send");
+        assert!(handle.is_some(), "a send handle should be spawned");
+    }
+
+    #[test]
+    fn ctrl_d_duplicates_and_does_not_quit() {
+        let (mut app, _dir) = make_app_crud(J_ONE);
+        app.selected = 1; // "ping"
+        app.focus = Pane::Tree;
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert!(!app.should_quit, "Ctrl+D must not quit");
+        assert!(
+            app.rows.iter().any(|r| r.name == "ping (Copy)"),
+            "Ctrl+D should duplicate the selected item"
+        );
+    }
 
     #[test]
     fn q_sets_should_quit() {

@@ -53,6 +53,15 @@ pub enum Command {
         /// Shell to generate completions for.
         shell: clap_complete::Shell,
     },
+    /// Upgrade golden to the latest release (Homebrew / installer-aware).
+    #[command(alias = "update")]
+    Upgrade,
+    /// Check the workspace + golden setup; report problems and how to fix them.
+    Doctor {
+        /// Apply safe fixes (e.g. seed `collections/` when none are found).
+        #[arg(long)]
+        fix: bool,
+    },
 }
 
 #[derive(Debug, Args)]

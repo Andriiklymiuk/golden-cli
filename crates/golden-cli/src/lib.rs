@@ -36,6 +36,8 @@ pub fn run() -> ExitCode {
             from,
         }) => commands::import::execute(source, name.as_deref(), strategy, from),
         Some(Command::Completion { shell }) => commands::completion::execute(*shell),
+        Some(Command::Upgrade) => commands::upgrade::execute(),
+        Some(Command::Doctor { fix }) => commands::doctor::execute(*fix, &cli.collections),
     };
     ExitCode::from(code as u8)
 }
