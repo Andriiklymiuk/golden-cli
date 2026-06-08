@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ScoopInstaller/Scoop/master/schema.json",
+  "version": "2.0.8",
+  "description": "Run and test Postman v2.1 collections from your terminal — Golden Retriever CLI/TUI",
+  "homepage": "https://github.com/Andriiklymiuk/golden-cli",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/Andriiklymiuk/golden-cli/releases/download/v2.0.8/golden-x86_64-pc-windows-msvc.zip",
+      "hash": ""
+    }
+  },
+  "bin": ["golden.exe", "gr.exe"],
+  "checkver": { "github": "https://github.com/Andriiklymiuk/golden-cli" },
+  "autoupdate": {
+    "architecture": {
+      "64bit": { "url": "https://github.com/Andriiklymiuk/golden-cli/releases/download/v$version/golden-x86_64-pc-windows-msvc.zip" }
+    },
+    "hash": { "url": "https://github.com/Andriiklymiuk/golden-cli/releases/download/v$version/golden-x86_64-pc-windows-msvc.zip.sha256" }
+  }
+}

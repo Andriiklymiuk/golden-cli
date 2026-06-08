@@ -1,0 +1,14 @@
+# Static musl builds: fully static binary, no glibc/OpenSSL dependency.
+# rustls (no OpenSSL) is already selected in golden-core's reqwest features.
+#
+# NOTE: Cross-linking from macOS to Linux musl requires a musl C cross-toolchain
+# (e.g. musl-cross, zig cc, or `cross`). Local macOS builds will fail at the
+# C-compilation step (rquickjs compiles QuickJS from C source). The real musl
+# static build runs on a Linux CI runner (Phase 2, Task 4) where no cross-linker
+# is needed. The config below is still valid and required for CI.
+
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]

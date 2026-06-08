@@ -1,0 +1,1956 @@
+{
+  "info": {
+    "name": "Fake APIs Collection",
+    "description": "A collection of requests for various free fake API services",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "jsonPlaceholderUrl",
+      "value": "https://jsonplaceholder.typicode.com",
+      "type": "string"
+    },
+    {
+      "key": "randomUserUrl",
+      "value": "https://randomuser.me/api",
+      "type": "string"
+    },
+    {
+      "key": "dummyJsonUrl",
+      "value": "https://dummyjson.com",
+      "type": "string"
+    },
+    {
+      "key": "mockyUrl",
+      "value": "https://run.mocky.io/v3",
+      "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "postId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "dummyJsonUserId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "dummyJsonProductId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "mockyResponseId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "pokemonName",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "pokemonId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "SPACEX_BASE_URL",
+      "value": "https://api.spacexdata.com/v4"
+    },
+    {
+      "key": "launchId",
+      "value": ""
+    },
+    {
+      "key": "missionName",
+      "value": ""
+    },
+    {
+      "key": "rocketId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "JSONPlaceholder",
+      "description": "A free fake REST API with endpoints for users, posts, comments, etc.",
+      "item": [
+        {
+          "name": "Get All Users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{jsonPlaceholderUrl}}/users",
+              "host": [
+                "{{jsonPlaceholderUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response is an array', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Response contains users', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response.length).to.be.above(0);",
+                  "    const user = response[0];",
+                  "    pm.expect(user).to.have.property('id');",
+                  "    pm.expect(user).to.have.property('name');",
+                  "    pm.expect(user).to.have.property('email');",
+                  "    pm.collectionVariables.set('userId', user.id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Single User",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{jsonPlaceholderUrl}}/users/{{userId}}",
+              "host": [
+                "{{jsonPlaceholderUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has correct user data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response.id.toString()).to.equal(pm.collectionVariables.get('userId'));",
+                  "    pm.expect(response).to.have.property('name');",
+                  "    pm.expect(response).to.have.property('email');",
+                  "    pm.expect(response).to.have.property('address');",
+                  "    pm.expect(response).to.have.property('phone');",
+                  "    pm.expect(response).to.have.property('website');",
+                  "    pm.expect(response).to.have.property('company');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get User Posts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{jsonPlaceholderUrl}}/users/{{userId}}/posts",
+              "host": [
+                "{{jsonPlaceholderUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}",
+                "posts"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response is an array of posts', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.be.an('array');",
+                  "    if (response.length > 0) {",
+                  "        const post = response[0];",
+                  "        pm.expect(post).to.have.property('userId');",
+                  "        pm.expect(post).to.have.property('id');",
+                  "        pm.expect(post).to.have.property('title');",
+                  "        pm.expect(post).to.have.property('body');",
+                  "        pm.collectionVariables.set('postId', post.id);",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Post",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"New Post Title\",\n  \"body\": \"This is the body of the post.\",\n  \"userId\": {{userId}}\n}"
+            },
+            "url": {
+              "raw": "{{jsonPlaceholderUrl}}/posts",
+              "host": [
+                "{{jsonPlaceholderUrl}}"
+              ],
+              "path": [
+                "posts"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 201', function() {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Response has created post data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('id');",
+                  "    pm.expect(response).to.have.property('title');",
+                  "    pm.expect(response).to.have.property('body');",
+                  "    pm.expect(response).to.have.property('userId');",
+                  "    pm.expect(response.title).to.equal('New Post Title');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Post",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": {{postId}},\n  \"title\": \"Updated Post Title\",\n  \"body\": \"This is the updated body of the post.\",\n  \"userId\": {{userId}}\n}"
+            },
+            "url": {
+              "raw": "{{jsonPlaceholderUrl}}/posts/{{postId}}",
+              "host": [
+                "{{jsonPlaceholderUrl}}"
+              ],
+              "path": [
+                "posts",
+                "{{postId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has updated post data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('id');",
+                  "    pm.expect(response).to.have.property('title');",
+                  "    pm.expect(response.title).to.equal('Updated Post Title');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete Post",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{jsonPlaceholderUrl}}/posts/{{postId}}",
+              "host": [
+                "{{jsonPlaceholderUrl}}"
+              ],
+              "path": [
+                "posts",
+                "{{postId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Random User Generator",
+      "description": "Generates random user data including names, emails, profile pictures, etc.",
+      "item": [
+        {
+          "name": "Get Random User",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{randomUserUrl}}",
+              "host": [
+                "{{randomUserUrl}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains user data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('results');",
+                  "    pm.expect(response.results).to.be.an('array');",
+                  "    pm.expect(response.results.length).to.equal(1);",
+                  "    ",
+                  "    const user = response.results[0];",
+                  "    pm.expect(user).to.have.property('name');",
+                  "    pm.expect(user).to.have.property('email');",
+                  "    pm.expect(user).to.have.property('picture');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Multiple Random Users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{randomUserUrl}}?results=5",
+              "host": [
+                "{{randomUserUrl}}"
+              ],
+              "query": [
+                {
+                  "key": "results",
+                  "value": "5"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains multiple users', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('results');",
+                  "    pm.expect(response.results).to.be.an('array');",
+                  "    pm.expect(response.results.length).to.equal(5);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Specific Gender",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{randomUserUrl}}?gender=female",
+              "host": [
+                "{{randomUserUrl}}"
+              ],
+              "query": [
+                {
+                  "key": "gender",
+                  "value": "female"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains female user', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('results');",
+                  "    pm.expect(response.results).to.be.an('array');",
+                  "    pm.expect(response.results.length).to.be.above(0);",
+                  "    ",
+                  "    const user = response.results[0];",
+                  "    pm.expect(user).to.have.property('gender');",
+                  "    pm.expect(user.gender).to.equal('female');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Specific Nationality",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{randomUserUrl}}?nat=us,gb",
+              "host": [
+                "{{randomUserUrl}}"
+              ],
+              "query": [
+                {
+                  "key": "nat",
+                  "value": "us,gb"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains user with correct nationality', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('results');",
+                  "    pm.expect(response.results).to.be.an('array');",
+                  "    pm.expect(response.results.length).to.be.above(0);",
+                  "    ",
+                  "    const user = response.results[0];",
+                  "    pm.expect(user).to.have.property('nat');",
+                  "    pm.expect(['us', 'gb']).to.include(user.nat.toLowerCase());",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Star Wars API (SWAPI)",
+      "description": "The Star Wars API - All the Star Wars data you've ever wanted! Planets, Spaceships, Vehicles, People, Films & Species",
+      "item": [
+        {
+          "name": "Get All People",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://swapi.info/api/people",
+              "host": [
+                "swapi",
+                "info"
+              ],
+              "path": [
+                "api",
+                "people"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response is an array of people', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.be.an('array');",
+                  "    pm.expect(response.length).to.be.above(0);",
+                  "});",
+                  "",
+                  "pm.test('First person has correct structure', function() {",
+                  "    const response = pm.response.json();",
+                  "    const person = response[0];",
+                  "    pm.expect(person).to.have.property('name');",
+                  "    pm.expect(person).to.have.property('height');",
+                  "    pm.expect(person).to.have.property('mass');",
+                  "    pm.expect(person).to.have.property('hair_color');",
+                  "    pm.expect(person).to.have.property('skin_color');",
+                  "    pm.expect(person).to.have.property('eye_color');",
+                  "    pm.expect(person).to.have.property('birth_year');",
+                  "    pm.expect(person).to.have.property('gender');",
+                  "    pm.expect(person).to.have.property('homeworld');",
+                  "    pm.expect(person).to.have.property('films');",
+                  "    pm.expect(person).to.have.property('species');",
+                  "    pm.expect(person).to.have.property('vehicles');",
+                  "    pm.expect(person).to.have.property('starships');",
+                  "    pm.expect(person).to.have.property('url');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Single Person",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://swapi.info/api/people/1",
+              "host": [
+                "swapi",
+                "info"
+              ],
+              "path": [
+                "api",
+                "people",
+                "1"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains Luke Skywalker data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response.name).to.equal('Luke Skywalker');",
+                  "    pm.expect(response.height).to.equal('172');",
+                  "    pm.expect(response.mass).to.equal('77');",
+                  "    pm.expect(response.hair_color).to.equal('blond');",
+                  "    pm.expect(response.eye_color).to.equal('blue');",
+                  "    pm.expect(response.birth_year).to.equal('19BBY');",
+                  "    pm.expect(response.gender).to.equal('male');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get All Films",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://swapi.info/api/films",
+              "host": [
+                "swapi",
+                "info"
+              ],
+              "path": [
+                "api",
+                "films"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains films data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.be.an('array');",
+                  "    pm.expect(response.length).to.equal(6);",
+                  "});",
+                  "",
+                  "pm.test('Films have correct structure', function() {",
+                  "    const response = pm.response.json();",
+                  "    const film = response[0];",
+                  "    pm.expect(film).to.have.property('title');",
+                  "    pm.expect(film).to.have.property('episode_id');",
+                  "    pm.expect(film).to.have.property('opening_crawl');",
+                  "    pm.expect(film).to.have.property('director');",
+                  "    pm.expect(film).to.have.property('producer');",
+                  "    pm.expect(film).to.have.property('release_date');",
+                  "    pm.expect(film).to.have.property('characters');",
+                  "    pm.expect(film).to.have.property('planets');",
+                  "    pm.expect(film).to.have.property('starships');",
+                  "    pm.expect(film).to.have.property('vehicles');",
+                  "    pm.expect(film).to.have.property('species');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Single Film",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://swapi.info/api/films/1",
+              "host": [
+                "swapi",
+                "info"
+              ],
+              "path": [
+                "api",
+                "films",
+                "1"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains A New Hope data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response.title).to.equal('A New Hope');",
+                  "    pm.expect(response.episode_id).to.equal(4);",
+                  "    pm.expect(response.director).to.equal('George Lucas');",
+                  "    pm.expect(response.release_date).to.equal('1977-05-25');",
+                  "    pm.expect(response.opening_crawl).to.include('civil war');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get All Planets",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://swapi.info/api/planets",
+              "host": [
+                "swapi",
+                "info"
+              ],
+              "path": [
+                "api",
+                "planets"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response is an array of planets', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.be.an('array');",
+                  "    pm.expect(response.length).to.be.above(0);",
+                  "});",
+                  "",
+                  "pm.test('Planet has correct structure', function() {",
+                  "    const response = pm.response.json();",
+                  "    const planet = response[0];",
+                  "    pm.expect(planet).to.have.property('name');",
+                  "    pm.expect(planet).to.have.property('rotation_period');",
+                  "    pm.expect(planet).to.have.property('orbital_period');",
+                  "    pm.expect(planet).to.have.property('diameter');",
+                  "    pm.expect(planet).to.have.property('climate');",
+                  "    pm.expect(planet).to.have.property('gravity');",
+                  "    pm.expect(planet).to.have.property('terrain');",
+                  "    pm.expect(planet).to.have.property('surface_water');",
+                  "    pm.expect(planet).to.have.property('population');",
+                  "    pm.expect(planet).to.have.property('residents');",
+                  "    pm.expect(planet).to.have.property('films');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Single Planet",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://swapi.info/api/planets/1",
+              "host": [
+                "swapi",
+                "info"
+              ],
+              "path": [
+                "api",
+                "planets",
+                "1"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains Tatooine data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response.name).to.equal('Tatooine');",
+                  "    pm.expect(response.climate).to.equal('arid');",
+                  "    pm.expect(response.terrain).to.equal('desert');",
+                  "    pm.expect(response.population).to.equal('200000');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get All Starships",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://swapi.info/api/starships",
+              "host": [
+                "swapi",
+                "info"
+              ],
+              "path": [
+                "api",
+                "starships"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response is an array of starships', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.be.an('array');",
+                  "    pm.expect(response.length).to.be.above(0);",
+                  "});",
+                  "",
+                  "pm.test('Starship has correct structure', function() {",
+                  "    const response = pm.response.json();",
+                  "    const starship = response[0];",
+                  "    pm.expect(starship).to.have.property('name');",
+                  "    pm.expect(starship).to.have.property('model');",
+                  "    pm.expect(starship).to.have.property('manufacturer');",
+                  "    pm.expect(starship).to.have.property('cost_in_credits');",
+                  "    pm.expect(starship).to.have.property('length');",
+                  "    pm.expect(starship).to.have.property('max_atmosphering_speed');",
+                  "    pm.expect(starship).to.have.property('crew');",
+                  "    pm.expect(starship).to.have.property('passengers');",
+                  "    pm.expect(starship).to.have.property('cargo_capacity');",
+                  "    pm.expect(starship).to.have.property('consumables');",
+                  "    pm.expect(starship).to.have.property('hyperdrive_rating');",
+                  "    pm.expect(starship).to.have.property('MGLT');",
+                  "    pm.expect(starship).to.have.property('starship_class');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get All Vehicles",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://swapi.info/api/vehicles",
+              "host": [
+                "swapi",
+                "info"
+              ],
+              "path": [
+                "api",
+                "vehicles"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response is an array of vehicles', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.be.an('array');",
+                  "    pm.expect(response.length).to.be.above(0);",
+                  "});",
+                  "",
+                  "pm.test('Vehicle has correct structure', function() {",
+                  "    const response = pm.response.json();",
+                  "    const vehicle = response[0];",
+                  "    pm.expect(vehicle).to.have.property('name');",
+                  "    pm.expect(vehicle).to.have.property('model');",
+                  "    pm.expect(vehicle).to.have.property('manufacturer');",
+                  "    pm.expect(vehicle).to.have.property('cost_in_credits');",
+                  "    pm.expect(vehicle).to.have.property('length');",
+                  "    pm.expect(vehicle).to.have.property('max_atmosphering_speed');",
+                  "    pm.expect(vehicle).to.have.property('crew');",
+                  "    pm.expect(vehicle).to.have.property('passengers');",
+                  "    pm.expect(vehicle).to.have.property('cargo_capacity');",
+                  "    pm.expect(vehicle).to.have.property('consumables');",
+                  "    pm.expect(vehicle).to.have.property('vehicle_class');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get All Species",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://swapi.info/api/species",
+              "host": [
+                "swapi",
+                "info"
+              ],
+              "path": [
+                "api",
+                "species"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response is an array of species', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.be.an('array');",
+                  "    pm.expect(response.length).to.be.above(0);",
+                  "});",
+                  "",
+                  "pm.test('Species has correct structure', function() {",
+                  "    const response = pm.response.json();",
+                  "    const species = response[0];",
+                  "    pm.expect(species).to.have.property('name');",
+                  "    pm.expect(species).to.have.property('classification');",
+                  "    pm.expect(species).to.have.property('designation');",
+                  "    pm.expect(species).to.have.property('average_height');",
+                  "    pm.expect(species).to.have.property('skin_colors');",
+                  "    pm.expect(species).to.have.property('hair_colors');",
+                  "    pm.expect(species).to.have.property('eye_colors');",
+                  "    pm.expect(species).to.have.property('average_lifespan');",
+                  "    pm.expect(species).to.have.property('homeworld');",
+                  "    pm.expect(species).to.have.property('language');",
+                  "    pm.expect(species).to.have.property('people');",
+                  "    pm.expect(species).to.have.property('films');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get API Root",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://swapi.info/api",
+              "host": [
+                "swapi",
+                "info"
+              ],
+              "path": [
+                "api"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains all API endpoints', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('films');",
+                  "    pm.expect(response).to.have.property('people');",
+                  "    pm.expect(response).to.have.property('planets');",
+                  "    pm.expect(response).to.have.property('species');",
+                  "    pm.expect(response).to.have.property('vehicles');",
+                  "    pm.expect(response).to.have.property('starships');",
+                  "    ",
+                  "    pm.expect(response.films).to.equal('https://swapi.info/api/films');",
+                  "    pm.expect(response.people).to.equal('https://swapi.info/api/people');",
+                  "    pm.expect(response.planets).to.equal('https://swapi.info/api/planets');",
+                  "    pm.expect(response.species).to.equal('https://swapi.info/api/species');",
+                  "    pm.expect(response.vehicles).to.equal('https://swapi.info/api/vehicles');",
+                  "    pm.expect(response.starships).to.equal('https://swapi.info/api/starships');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "DummyJSON",
+      "description": "Provides fake data for e-commerce applications including users, products, carts, etc.",
+      "item": [
+        {
+          "name": "Get All Products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{dummyJsonUrl}}/products",
+              "host": [
+                "{{dummyJsonUrl}}"
+              ],
+              "path": [
+                "products"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains product data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('products');",
+                  "    pm.expect(response).to.have.property('total');",
+                  "    pm.expect(response).to.have.property('limit');",
+                  "    pm.expect(response.products).to.be.an('array');",
+                  "    ",
+                  "    if(response.products.length > 0) {",
+                  "        const product = response.products[0];",
+                  "        pm.expect(product).to.have.property('id');",
+                  "        pm.expect(product).to.have.property('title');",
+                  "        pm.expect(product).to.have.property('description');",
+                  "        pm.expect(product).to.have.property('price');",
+                  "        pm.expect(product).to.have.property('brand');",
+                  "        pm.expect(product).to.have.property('category');",
+                  "        ",
+                  "        pm.collectionVariables.set('dummyJsonProductId', product.id);",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Single Product",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{dummyJsonUrl}}/products/{{dummyJsonProductId}}",
+              "host": [
+                "{{dummyJsonUrl}}"
+              ],
+              "path": [
+                "products",
+                "{{dummyJsonProductId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains product data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('id');",
+                  "    pm.expect(response.id.toString()).to.equal(pm.collectionVariables.get('dummyJsonProductId'));",
+                  "    pm.expect(response).to.have.property('title');",
+                  "    pm.expect(response).to.have.property('description');",
+                  "    pm.expect(response).to.have.property('price');",
+                  "    pm.expect(response).to.have.property('brand');",
+                  "    pm.expect(response).to.have.property('category');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Search Products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{dummyJsonUrl}}/products/search?q=phone",
+              "host": [
+                "{{dummyJsonUrl}}"
+              ],
+              "path": [
+                "products",
+                "search"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "phone"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains search results', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('products');",
+                  "    pm.expect(response).to.have.property('total');",
+                  "    pm.expect(response).to.have.property('limit');",
+                  "    ",
+                  "    const products = response.products;",
+                  "    pm.expect(products).to.be.an('array');",
+                  "    ",
+                  "    // Check if search results contain the search term in title or description",
+                  "    if(products.length > 0) {",
+                  "        const product = products[0];",
+                  "        const searchTerm = 'phone';",
+                  "        const matchesTitle = product.title.toLowerCase().includes(searchTerm);",
+                  "        const matchesDescription = product.description.toLowerCase().includes(searchTerm);",
+                  "        pm.expect(matchesTitle || matchesDescription).to.be.true;",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get All Users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{dummyJsonUrl}}/users",
+              "host": [
+                "{{dummyJsonUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains user data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('users');",
+                  "    pm.expect(response.users).to.be.an('array');",
+                  "    ",
+                  "    if(response.users.length > 0) {",
+                  "        const user = response.users[0];",
+                  "        pm.expect(user).to.have.property('id');",
+                  "        pm.expect(user).to.have.property('firstName');",
+                  "        pm.expect(user).to.have.property('lastName');",
+                  "        pm.expect(user).to.have.property('email');",
+                  "        ",
+                  "        pm.collectionVariables.set('dummyJsonUserId', user.id);",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Single User",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{dummyJsonUrl}}/users/{{dummyJsonUserId}}",
+              "host": [
+                "{{dummyJsonUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{dummyJsonUserId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains user data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('id');",
+                  "    pm.expect(response.id.toString()).to.equal(pm.collectionVariables.get('dummyJsonUserId'));",
+                  "    pm.expect(response).to.have.property('firstName');",
+                  "    pm.expect(response).to.have.property('lastName');",
+                  "    pm.expect(response).to.have.property('email');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get User Cart",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{dummyJsonUrl}}/users/{{dummyJsonUserId}}/carts",
+              "host": [
+                "{{dummyJsonUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{dummyJsonUserId}}",
+                "carts"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains cart data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('carts');",
+                  "    pm.expect(response.carts).to.be.an('array');",
+                  "    ",
+                  "    if(response.carts.length > 0) {",
+                  "        const cart = response.carts[0];",
+                  "        pm.expect(cart).to.have.property('id');",
+                  "        pm.expect(cart).to.have.property('products');",
+                  "        pm.expect(cart).to.have.property('total');",
+                  "        pm.collectionVariables.set('dummyJsonCartId', cart.id);",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Add New Product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": {
+                "title": "New Product",
+                "description": "A new test product",
+                "price": 499,
+                "brand": "Test Brand",
+                "category": "test"
+              }
+            },
+            "url": {
+              "raw": "{{dummyJsonUrl}}/products/add",
+              "host": [
+                "{{dummyJsonUrl}}"
+              ],
+              "path": [
+                "products",
+                "add"
+              ],
+              "query": []
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 201', function() {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "pm.test('Response contains added product data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('id');",
+                  "    pm.expect(response).to.have.property('title');",
+                  "    pm.expect(response.title).to.equal('New Product');",
+                  "    pm.expect(response).to.have.property('price');",
+                  "    pm.expect(response.price).to.equal(499);",
+                  "});"
+                ],
+                "type": "text/javascript",
+                "packages": {}
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PokéAPI",
+      "description": "A RESTful API for Pokémon data",
+      "item": [
+        {
+          "name": "Get Pokémon List",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://pokeapi.co/api/v2/pokemon?limit=20&offset=0",
+              "host": [
+                "pokeapi",
+                "co"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "pokemon"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains pokemon list', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('results');",
+                  "    pm.expect(response.results).to.be.an('array');",
+                  "    pm.expect(response).to.have.property('count');",
+                  "    pm.expect(response).to.have.property('next');",
+                  "    ",
+                  "    if(response.results.length > 0) {",
+                  "        const pokemon = response.results[0];",
+                  "        pm.expect(pokemon).to.have.property('name');",
+                  "        pm.expect(pokemon).to.have.property('url');",
+                  "        ",
+                  "        // Store the name of the first pokemon for later requests",
+                  "        pm.collectionVariables.set('pokemonName', pokemon.name);",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Single Pokémon",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://pokeapi.co/api/v2/pokemon/{{pokemonName}}",
+              "host": [
+                "pokeapi",
+                "co"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "pokemon",
+                "{{pokemonName}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains pokemon data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('id');",
+                  "    pm.expect(response).to.have.property('name');",
+                  "    pm.expect(response.name).to.equal(pm.collectionVariables.get('pokemonName'));",
+                  "    pm.expect(response).to.have.property('height');",
+                  "    pm.expect(response).to.have.property('weight');",
+                  "    pm.expect(response).to.have.property('types');",
+                  "    pm.expect(response).to.have.property('abilities');",
+                  "    ",
+                  "    // Store the pokemon ID for later requests",
+                  "    pm.collectionVariables.set('pokemonId', response.id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Pokémon Type",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://pokeapi.co/api/v2/type/1",
+              "host": [
+                "pokeapi",
+                "co"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "type",
+                "1"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains type data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('id');",
+                  "    pm.expect(response).to.have.property('name');",
+                  "    pm.expect(response).to.have.property('damage_relations');",
+                  "    pm.expect(response).to.have.property('pokemon');",
+                  "    pm.expect(response.pokemon).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Pokémon Species",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://pokeapi.co/api/v2/pokemon-species/{{pokemonId}}",
+              "host": [
+                "pokeapi",
+                "co"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "pokemon-species",
+                "{{pokemonId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains species data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('id');",
+                  "    pm.expect(response.id.toString()).to.equal(pm.collectionVariables.get('pokemonId'));",
+                  "    pm.expect(response).to.have.property('name');",
+                  "    pm.expect(response).to.have.property('flavor_text_entries');",
+                  "    pm.expect(response).to.have.property('genera');",
+                  "    pm.expect(response).to.have.property('evolution_chain');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Pokémon Ability",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://pokeapi.co/api/v2/ability/1",
+              "host": [
+                "pokeapi",
+                "co"
+              ],
+              "path": [
+                "api",
+                "v2",
+                "ability",
+                "1"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains ability data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('id');",
+                  "    pm.expect(response).to.have.property('name');",
+                  "    pm.expect(response).to.have.property('effect_entries');",
+                  "    pm.expect(response).to.have.property('pokemon');",
+                  "    pm.expect(response.pokemon).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "SpaceX REST API (v4)",
+      "item": [
+        {
+          "name": "Get Past Launches",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": { \"upcoming\": false },\n  \"options\": { \"limit\": 5, \"sort\": { \"date_unix\": \"desc\" } }\n}"
+            },
+            "url": {
+              "raw": "{{SPACEX_BASE_URL}}/launches/query",
+              "host": [
+                "{{SPACEX_BASE_URL}}"
+              ],
+              "path": [
+                "launches",
+                "query"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has launches data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('docs');",
+                  "    pm.expect(response.docs).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Launch objects have correct structure', function() {",
+                  "    const docs = pm.response.json().docs;",
+                  "    if (docs.length > 0) {",
+                  "        const launch = docs[0];",
+                  "        pm.expect(launch).to.have.property('id');",
+                  "        pm.expect(launch).to.have.property('name');",
+                  "        pm.expect(launch).to.have.property('date_local');",
+                  "        pm.expect(launch).to.have.property('rocket');",
+                  "        pm.expect(launch).to.have.property('links');",
+                  "        pm.collectionVariables.set('launchId', launch.id);",
+                  "        pm.collectionVariables.set('missionName', launch.name);",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Launch By ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{SPACEX_BASE_URL}}/launches/{{launchId}}",
+              "host": [
+                "{{SPACEX_BASE_URL}}"
+              ],
+              "path": [
+                "launches",
+                "{{launchId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has launch data', function() {",
+                  "    const launch = pm.response.json();",
+                  "    pm.expect(launch).to.be.an('object');",
+                  "    pm.expect(launch).to.have.property('id');",
+                  "});",
+                  "",
+                  "pm.test('Launch has correct structure', function() {",
+                  "    const launch = pm.response.json();",
+                  "    pm.expect(launch.id).to.equal(pm.collectionVariables.get('launchId'));",
+                  "    pm.expect(launch).to.have.property('name');",
+                  "    pm.expect(launch).to.have.property('date_local');",
+                  "    pm.expect(launch).to.have.property('rocket');",
+                  "    pm.expect(launch).to.have.property('links');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Search Launches By Mission Name",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": { \"name\": \"{{missionName}}\" },\n  \"options\": { \"limit\": 5 }\n}"
+            },
+            "url": {
+              "raw": "{{SPACEX_BASE_URL}}/launches/query",
+              "host": [
+                "{{SPACEX_BASE_URL}}"
+              ],
+              "path": [
+                "launches",
+                "query"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response contains mission search results', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.have.property('docs');",
+                  "    pm.expect(response.docs).to.be.an('array');",
+                  "    ",
+                  "    if (response.docs.length > 0) {",
+                  "        const launch = response.docs[0];",
+                  "        pm.expect(launch).to.have.property('name');",
+                  "        pm.expect(launch.name.toLowerCase()).to.include(pm.collectionVariables.get('missionName').toLowerCase());",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Upcoming Launches",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{SPACEX_BASE_URL}}/launches/upcoming",
+              "host": [
+                "{{SPACEX_BASE_URL}}"
+              ],
+              "path": [
+                "launches",
+                "upcoming"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has upcoming launches data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get All Rockets",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{SPACEX_BASE_URL}}/rockets",
+              "host": [
+                "{{SPACEX_BASE_URL}}"
+              ],
+              "path": [
+                "rockets"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has rockets data', function() {",
+                  "    const response = pm.response.json();",
+                  "    pm.expect(response).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Rocket objects have correct structure', function() {",
+                  "    const rockets = pm.response.json();",
+                  "    if (rockets.length > 0) {",
+                  "        const rocket = rockets[0];",
+                  "        pm.expect(rocket).to.have.property('id');",
+                  "        pm.expect(rocket).to.have.property('name');",
+                  "        pm.expect(rocket).to.have.property('type');",
+                  "        pm.expect(rocket).to.have.property('active');",
+                  "        pm.expect(rocket).to.have.property('company');",
+                  "        pm.expect(rocket).to.have.property('description');",
+                  "        pm.collectionVariables.set('rocketId', rocket.id);",
+                  "    }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Company Details",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{SPACEX_BASE_URL}}/company",
+              "host": [
+                "{{SPACEX_BASE_URL}}"
+              ],
+              "path": [
+                "company"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has company data', function() {",
+                  "    const company = pm.response.json();",
+                  "    pm.expect(company).to.be.an('object');",
+                  "});",
+                  "",
+                  "pm.test('Company has correct structure', function() {",
+                  "    const company = pm.response.json();",
+                  "    pm.expect(company).to.have.property('name');",
+                  "    pm.expect(company).to.have.property('founder');",
+                  "    pm.expect(company).to.have.property('founded');",
+                  "    pm.expect(company).to.have.property('employees');",
+                  "    pm.expect(company).to.have.property('headquarters');",
+                  "    pm.expect(company).to.have.property('summary');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Single Rocket",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{SPACEX_BASE_URL}}/rockets/{{rocketId}}",
+              "host": [
+                "{{SPACEX_BASE_URL}}"
+              ],
+              "path": [
+                "rockets",
+                "{{rocketId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has rocket data', function() {",
+                  "    const rocket = pm.response.json();",
+                  "    pm.expect(rocket).to.be.an('object');",
+                  "    pm.expect(rocket).to.have.property('id');",
+                  "});",
+                  "",
+                  "pm.test('Rocket has correct structure', function() {",
+                  "    const rocket = pm.response.json();",
+                  "    pm.expect(rocket.id).to.equal(pm.collectionVariables.get('rocketId'));",
+                  "    pm.expect(rocket).to.have.property('name');",
+                  "    pm.expect(rocket).to.have.property('type');",
+                  "    pm.expect(rocket).to.have.property('description');",
+                  "    pm.expect(rocket).to.have.property('success_rate_pct');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Latest Launch",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{SPACEX_BASE_URL}}/launches/latest",
+              "host": [
+                "{{SPACEX_BASE_URL}}"
+              ],
+              "path": [
+                "launches",
+                "latest"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status code is 200', function() {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test('Response has latest launch data', function() {",
+                  "    const launch = pm.response.json();",
+                  "    pm.expect(launch).to.be.an('object');",
+                  "    pm.expect(launch).to.have.property('id');",
+                  "    pm.expect(launch).to.have.property('name');",
+                  "    pm.expect(launch).to.have.property('date_local');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

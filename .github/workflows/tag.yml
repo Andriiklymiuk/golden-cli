@@ -1,0 +1,48 @@
+name: Tag release
+on:
+  push:
+    branches: ["main"]
+permissions:
+  contents: write
+  actions: write
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      # Built-in GITHUB_TOKEN is enough: it can push the tag AND dispatch
+      # release.yml. GitHub blocks a token-pushed *tag* from triggering the
+      # `push` event in release.yml, but workflow_dispatch is the documented
+      # exception — so no GH_PAT secret is required for full automation.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Read version into env
+        run: make getActionVersion
+      - name: Create tag + dispatch release if version is new
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${VERSION}"
+          echo "Resolved tag: $TAG"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Tag $TAG already exists locally, skipping"
+            exit 0
+          fi
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/ref/tags/$TAG")
+          if [ "$STATUS" -eq 200 ]; then
+            echo "Tag $TAG already exists on remote, skipping"
+            exit 0
+          fi
+          git config user.email "action@github.com"
+          git config user.name "GitHub Action"
+          git tag "$TAG"
+          git push origin "$TAG"
+          echo "Pushed $TAG"
+          # Dispatch release.yml against the freshly pushed tag. Dispatching with
+          # the built-in token DOES start the run (unlike the tag push itself),
+          # so the full cargo-dist build/host/publish pipeline runs the golden CLI
+          # release with no extra secret.
+          gh workflow run release.yml --ref "$TAG" -f tag="$TAG"
+          echo "Dispatched release.yml for $TAG"

@@ -1,0 +1,48 @@
+# cargo-dist (dist 0.32.0) configuration. Drives prebuilt binaries, checksums,
+# installer scripts, and the Homebrew tap bump on tagged releases.
+# This repo IS the cargo workspace root, so point dist at "." (not a subdir).
+
+[workspace]
+members = ["cargo:."]
+
+[dist]
+# Pin the dist version CI uses (Cargo SemVer syntax).
+cargo-dist-version = "0.32.0"
+# Generate CI for GitHub Actions (writes .github/workflows/release.yml).
+ci = "github"
+# release.yml is HAND-AUTHORED (cargo-dist isn't installed in this repo's env) and
+# adds a workflow_dispatch trigger so tag.yml can kick off releases with the
+# built-in GITHUB_TOKEN. Without this, `dist plan` fails the run with
+# "release.yml has out of date contents and needs to be regenerated" (exit 255),
+# so no release is ever created. allow-dirty = ["ci"] skips that consistency check.
+allow-dirty = ["ci"]
+# Installers to generate on each release.
+installers = ["shell", "powershell", "homebrew"]
+# Platforms. Linux uses musl for fully static binaries (rustls, no OpenSSL).
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-pc-windows-msvc",
+]
+# Push the Homebrew formula to the existing tap (matches the corgi pattern).
+tap = "andriiklymiuk/homebrew-tools"
+# Run the homebrew publish job in CI on release.
+publish-jobs = ["homebrew"]
+# Generate checksums alongside artifacts.
+checksum = "sha256"
+# Where release artifacts are hosted.
+hosting = ["github"]
+# Inject Windows LIBCLANG_PATH step into every build job (durable across dist
+# regeneration). Path is relative to .github/workflows/ where release.yml lives,
+# so "../../build-setup.yml" resolves to build-setup.yml at the repo root.
+github-build-setup = "../../build-setup.yml"
+
+# Use the GitHub-hosted runners for the musl targets (taiki-e/setup-cross-toolchain-action
+# handles the musl cross-compilation toolchain installation on ubuntu-latest).
+[dist.github-custom-runners]
+# aarch64 musl on a native arm64 runner — cross-compiling the C quickjs dep from
+# x86 fails; native arm64 builds it like x86 musl. x86 musl stays on x86.
+aarch64-unknown-linux-musl = "ubuntu-24.04-arm"
+x86_64-unknown-linux-musl = "ubuntu-latest"

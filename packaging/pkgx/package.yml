@@ -1,0 +1,31 @@
+# Staged for submission to https://github.com/pkgxdev/pantry
+# Target path in pantry repo: projects/github.com/Andriiklymiuk/golden-cli/package.yml
+#
+# After merge, users get:
+#   pkgx golden run
+#   pkgx install golden
+
+distributable:
+  url: https://github.com/Andriiklymiuk/golden-cli/archive/refs/tags/v{{version}}.tar.gz
+  strip-components: 1
+
+versions:
+  github: Andriiklymiuk/golden-cli
+  strip: /v/
+
+provides:
+  - bin/golden
+  - bin/gr
+
+dependencies:
+  rust-lang.org: ^1.82
+
+build:
+  # The cargo workspace is at the repo root, so build the package directly.
+  script: |
+    cargo build --release --locked -p golden-cli
+    mkdir -p "{{prefix}}/bin"
+    mv target/release/golden "{{prefix}}/bin/golden"
+    mv target/release/gr "{{prefix}}/bin/gr"
+  env:
+    CARGO_HOME: ${{prefix}}/cargo

@@ -1,0 +1,15 @@
+[package]
+name = "xtask-conformance"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Never distribute this internal tool.
+[package.metadata.dist]
+dist = false
+
+[dependencies]
+golden-core = { path = "../crates/golden-core" }
+serde.workspace = true
+serde_json.workspace = true

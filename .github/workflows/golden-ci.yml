@@ -1,0 +1,191 @@
+name: Golden CI
+
+on:
+  push:
+    branches: [main]
+    # Avoid double-running on release tags (release.yml handles those).
+    tags-ignore: ["*"]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: golden-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Full cross-OS matrix only on pull requests. On push (including the frequent
+        # version-bump commits) run ubuntu only — macOS/Windows compilation is still
+        # validated by the release build (all 5 targets) on every tag, so the extra
+        # two runners per push are redundant.
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      # rquickjs needs bindgen/libclang; GitHub's windows-latest preinstalls LLVM.
+      - name: Set LIBCLANG_PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # On Linux, install musl-tools so the musl static build target is linkable.
+      - name: Install musl-tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Add musl target (Linux)
+        if: runner.os == 'Linux'
+        run: rustup target add x86_64-unknown-linux-musl
+
+      - name: Build workspace
+        run: cargo build --workspace --verbose
+
+      - name: Test workspace
+        run: cargo test --workspace --verbose
+
+      # Build the musl static binary as a gating check on Linux only.
+      - name: Build static musl binary (Linux)
+        if: runner.os == 'Linux'
+        run: cargo build -p golden-cli --release --target x86_64-unknown-linux-musl
+
+  lint:
+    name: clippy + rustfmt + sample sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable) with clippy + rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt (check)
+        run: cargo fmt --all -- --check
+
+      - name: clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Fail if the on-disk sample collection drifted from the embedded asset.
+      - name: Sample collection in sync
+        run: make checkSampleCollection
+
+  conformance:
+    name: conformance gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # xtask-conformance shells out to `npx newman` for the oracle diff.
+      # Install Node + newman 6.x so the harness can invoke it.
+      - name: Set up Node.js (for newman oracle)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install newman
+        run: npm install -g newman@6
+
+      # Fails the build on any undocumented divergence from the newman oracle.
+      - name: Run conformance harness
+        run: cargo run -p xtask-conformance --release
+
+  dogfood:
+    name: dogfood (golden run collections/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build golden
+        run: cargo build -p golden-cli --release
+
+      # Dogfood the real binary on this repo's own sample collection. This proves
+      # the shipped binary RUNS a real collection end-to-end — not that every
+      # external API is up. The sample hits ~10 live public APIs; transient
+      # request/assertion failures (a host down, a slow endpoint) are EXPECTED and
+      # must not fail CI.
+      #
+      # golden's normal exit codes: 0 = all pass · 1 = assertion failure ·
+      # 2 = network/exec error. All three mean "the collection ran". Only a
+      # crash/signal (>2) or no run summary at all is a real failure.
+      #
+      # NOTE: GitHub runs this under `bash -eo pipefail`, so golden's exit MUST be
+      # captured with `|| code=$?`. A bare `golden ... ; code=$?` lets errexit kill
+      # the step on exit 1 before the gate runs. `--timeout` makes dead hosts fail
+      # fast instead of hanging ~20s each.
+      - name: golden run collections/
+        run: |
+          code=0
+          ./target/release/golden run collections/ --timeout 15000 > /tmp/dogfood.out 2>&1 || code=$?
+          cat /tmp/dogfood.out
+          echo "golden exit code: $code"
+          if [ "$code" -gt 2 ]; then
+            echo "::error::golden crashed/signalled (exit $code > 2)"
+            exit 1
+          fi
+          if ! grep -q "requests" /tmp/dogfood.out; then
+            echo "::error::golden produced no run summary — it did not execute"
+            exit 1
+          fi
+          echo "dogfood OK — golden ran the collection (exit $code: 0=all pass, 1=assertion fail, 2=network/exec error)."
+
+  coverage:
+    name: coverage + sonar
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust (stable) + llvm-tools
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Coverage (lcov)
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+      # Skips when SONAR_TOKEN is unset (e.g. forks, or before the secret is added)
+      # so coverage still runs and CI stays green.
+      - name: SonarQube Cloud scan
+        if: ${{ env.SONAR_TOKEN != '' }}
+        uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

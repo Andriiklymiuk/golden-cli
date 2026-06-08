@@ -1,0 +1,354 @@
+# Release workflow for the golden CLI, modeled on cargo-dist (dist 0.32.0)
+# configuration in dist-workspace.toml. Triggers on version tags (e.g. v2.1.0)
+# and runs plan → build → github-release → publish-homebrew-formula.
+#
+# HAND-AUTHORED (cargo-dist not installed in this environment) following
+# cargo-dist 0.32.x schema: https://github.com/axodotdev/cargo-dist
+#
+# Diffs from a vanilla dist generate:
+#   - build-setup.yml injects LIBCLANG_PATH for rquickjs/bindgen on Windows
+#     (referenced via github-build-setup in dist-workspace.toml).
+#   - musl targets run on native runners with taiki-e/setup-cross-toolchain-action.
+
+name: Release
+
+permissions:
+  contents: write
+
+# Trigger on version tags (manual / PAT-pushed tags), OR via workflow_dispatch.
+# tag.yml dispatches this with the built-in GITHUB_TOKEN after pushing the tag:
+# a tag pushed with GITHUB_TOKEN can't trigger the `push` event above (GitHub
+# blocks workflow-token pushes from starting other workflows), but
+# workflow_dispatch IS an explicit exception to that rule, so the dispatched run
+# builds the release with no GH_PAT secret required. Never on branch pushes
+# (golden-ci.yml handles those).
+on:
+  push:
+    tags:
+      - "**[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to release (e.g. v2.1.0). Defaults to the dispatched ref."
+        required: false
+        type: string
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  RUSTFLAGS: -D warnings
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  # ── plan ──────────────────────────────────────────────────────────────────
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      val: ${{ steps.plan.outputs.manifest }}
+      tag: ${{ inputs.tag || (!github.event.pull_request.head.sha && github.ref_name) || '' }}
+      tag-flag: ${{ (inputs.tag && format('--tag={0}', inputs.tag)) || (!github.event.pull_request.head.sha && format('--tag={0}', github.ref_name)) || '' }}
+      publishing: ${{ !github.event.pull_request.head.sha }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install cargo-dist
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh \
+            | sh
+
+      - name: Plan dist
+        id: plan
+        run: |
+          dist plan ${{ !github.event.pull_request.head.sha && format('--tag={0}', github.ref_name) || '' }} \
+            --output-format=json > dist-manifest.json
+          # dist-manifest.json is multi-line JSON. A bare `manifest=$(cat ...)`
+          # writes newlines into $GITHUB_OUTPUT, which GitHub rejects with
+          # "Invalid format" / "Unable to process file command 'output'". Use the
+          # heredoc delimiter form, which is the only valid way to set a
+          # multi-line step output.
+          {
+            echo "manifest<<DIST_MANIFEST_EOF"
+            cat dist-manifest.json
+            echo "DIST_MANIFEST_EOF"
+          } >> "$GITHUB_OUTPUT"
+          cat dist-manifest.json
+
+      - name: Upload dist-manifest.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-dist-manifest
+          path: dist-manifest.json
+
+  # ── build-local-artifacts (per-platform binaries + archives) ─────────────
+  build-local-artifacts:
+    name: build ${{ join(matrix.targets, ', ') }}
+    needs: plan
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS ARM
+          - os: macos-latest
+            targets: [aarch64-apple-darwin]
+          # macOS Intel
+          - os: macos-latest
+            targets: [x86_64-apple-darwin]
+          # Linux x86_64 musl (static)
+          - os: ubuntu-latest
+            targets: [x86_64-unknown-linux-musl]
+          # Linux aarch64 musl (static) — built on a NATIVE arm64 runner.
+          # Cross-compiling rquickjs/quickjs (C + bindgen) from x86 to aarch64
+          # fails; a native arm64 runner makes this a native build like x86 musl.
+          - os: ubuntu-24.04-arm
+            targets: [aarch64-unknown-linux-musl]
+          # Windows MSVC
+          - os: windows-latest
+            targets: [x86_64-pc-windows-msvc]
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # rquickjs/bindgen needs libclang on Windows; GitHub preinstalls LLVM here.
+      # Key off matrix.os, not runner.os — the runner context is unavailable in a
+      # job-level env block (only inside steps), and that parse error blocks the
+      # whole workflow from being dispatched.
+      LIBCLANG_PATH: ${{ matrix.os == 'windows-latest' && 'C:\Program Files\LLVM\bin' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      # Musl cross-compilation toolchain (Linux targets only).
+      - name: Set up cross-compilation toolchain (musl)
+        if: contains(matrix.targets[0], 'musl')
+        uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ matrix.targets[0] }}
+
+      # musl-tools for the musl linker on ubuntu runners.
+      - name: Install musl-tools (Linux musl)
+        if: contains(matrix.targets[0], 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-dist
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh \
+            | sh
+        shell: bash
+
+      - name: Build artifacts
+        run: |
+          dist build ${{ needs.plan.outputs.tag-flag }} \
+            --output-format=json \
+            --artifacts=local \
+            "--target=${{ join(matrix.targets, ' --target=') }}" \
+            > dist-manifest.json
+        shell: bash
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ join(matrix.targets, '_') }}
+          path: |
+            dist-manifest.json
+            target/distrib/
+
+  # ── build-global-artifacts (shell + powershell installers) ───────────────
+  build-global-artifacts:
+    name: build global artifacts
+    needs:
+      - plan
+      - build-local-artifacts
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install cargo-dist
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/axodotdev/cargo-dist/releases/download/v0.32.0/cargo-dist-installer.sh \
+            | sh
+
+      - name: Download local artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-*
+          path: target/distrib/
+          merge-multiple: true
+
+      - name: Build global artifacts (shell/powershell installers + checksums)
+        run: |
+          dist build ${{ needs.plan.outputs.tag-flag }} \
+            --output-format=json \
+            --artifacts=global \
+            > dist-manifest.json
+        shell: bash
+
+      - name: Upload global artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-global
+          path: |
+            dist-manifest.json
+            target/distrib/
+
+  # ── github-release (create the published GitHub Release directly) ─────────
+  # cargo-dist 0.32's `dist host` exits 0 but creates NO GitHub release here, so
+  # we publish the artifacts it BUILT using `gh release` instead — reliable and
+  # transparent. Collects the per-platform archives, installers and checksums
+  # (deduped by basename) and creates a published, latest release in one shot.
+  # The homebrew formula (golden.rb) is pushed to the tap by the job below, not
+  # attached here.
+  github-release:
+    name: github release
+    needs:
+      - plan
+      - build-local-artifacts
+      - build-global-artifacts
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      # fetch-depth: 0 pulls full history + all tags so we can diff the previous
+      # release tag against this one and embed the commit log in the notes.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-*
+          path: dist
+          merge-multiple: true
+
+      # Build the release body from the actual commit history between the last
+      # release tag and this one — not a bare link to a CHANGELOG. Readers see
+      # exactly what shipped, right on the Release page.
+      - name: Build release notes from commit history
+        run: |
+          TAG="${{ needs.plan.outputs.tag }}"
+          # Previous tag by version order, excluding the one being released.
+          PREV=$(git tag --sort=-version:refname | grep -vFx "$TAG" | head -1 || true)
+          {
+            echo "## golden $TAG"
+            echo
+            if [ -n "$PREV" ]; then
+              echo "### Changes since [\`$PREV\`](https://github.com/${GITHUB_REPOSITORY}/releases/tag/$PREV)"
+              echo
+              git log --no-merges --pretty=format:'- %s (\`%h\`) — %an' "$PREV..$TAG"
+              echo
+              echo
+              echo "**Full diff:** https://github.com/${GITHUB_REPOSITORY}/compare/$PREV...$TAG"
+            else
+              echo "### First release — all commits"
+              echo
+              git log --no-merges --pretty=format:'- %s (\`%h\`) — %an' "$TAG"
+            fi
+            echo
+            echo
+            echo "### Install"
+            echo
+            echo '```bash'
+            echo "brew install andriiklymiuk/homebrew-tools/golden"
+            echo '```'
+            echo
+            echo "Or grab a prebuilt binary / installer from the assets below."
+          } > release-notes.md
+          echo "----- release-notes.md -----"
+          cat release-notes.md
+
+      - name: Collect release assets (dedupe by filename)
+        run: |
+          mkdir -p upload
+          find dist -type f \( \
+            -name 'golden-cli-*.tar.xz' -o \
+            -name 'golden-cli-*.tar.gz' -o \
+            -name 'golden-cli-*.zip' -o \
+            -name '*.sha256' -o \
+            -name 'sha256.sum' -o \
+            -name 'golden-cli-installer.sh' -o \
+            -name 'golden-cli-installer.ps1' -o \
+            -name 'source.tar.gz' -o \
+            -name 'dist-manifest.json' \) \
+            -exec cp -n {} upload/ \;
+          echo "Assets to publish:"
+          ls -1 upload/
+
+      - name: Create / update the GitHub Release
+        run: |
+          TAG="${{ needs.plan.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists — updating assets, notes and publishing."
+            gh release upload "$TAG" upload/* --clobber
+            gh release edit "$TAG" --notes-file release-notes.md --draft=false --latest
+          else
+            gh release create "$TAG" upload/* \
+              --title "$TAG" \
+              --notes-file release-notes.md \
+              --latest
+          fi
+          echo "Release $TAG is live: $(gh release view "$TAG" --json url -q .url)"
+
+  # ── publish-homebrew-formula ──────────────────────────────────────────────
+  # cargo-dist 0.32 has NO `dist publish` subcommand; the homebrew formula it
+  # generates is just a global build artifact. Push that .rb straight to the tap
+  # (formulae live at the tap repo ROOT, e.g. golden.rb). Runs after github-release
+  # so the release asset URLs the formula points at are already public.
+  publish-homebrew-formula:
+    name: publish homebrew formula
+    needs:
+      - plan
+      - github-release
+    runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Download artifacts (contains the generated .rb formula)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-*
+          path: dist
+          merge-multiple: true
+
+      - name: Push formula to andriiklymiuk/homebrew-tools
+        run: |
+          FORMULA=$(find dist -name '*.rb' | head -1)
+          if [ -z "$FORMULA" ]; then
+            echo "::warning title=Homebrew skipped::No .rb formula found in the build artifacts; tap not updated."
+            exit 0
+          fi
+          NAME=$(basename "$FORMULA")
+          echo "Publishing $NAME to andriiklymiuk/homebrew-tools"
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/andriiklymiuk/homebrew-tools.git" tap
+          cp "$FORMULA" "tap/$NAME"
+          cd tap
+          git config user.email "action@github.com"
+          git config user.name "GitHub Action"
+          git add "$NAME"
+          if git diff --cached --quiet; then
+            echo "Formula $NAME unchanged — nothing to publish."
+          else
+            git commit -m "golden ${{ needs.plan.outputs.tag }}"
+            git push origin HEAD
+            echo "Pushed $NAME to the tap."
+          fi

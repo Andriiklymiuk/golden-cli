@@ -1,0 +1,34 @@
+[package]
+name = "golden-cli"
+version = "2.0.8"
+edition.workspace = true
+license.workspace = true
+description = "Run and test Postman v2.1 collections from the terminal — the CLI for Golden Retriever."
+homepage = "https://github.com/Andriiklymiuk/golden-cli"
+repository = "https://github.com/Andriiklymiuk/golden-cli"
+
+# Two binaries (golden, gr) auto-discovered from src/bin/; shared logic in src/lib.rs.
+
+[dependencies]
+golden-core = { path = "../golden-core" }
+clap.workspace = true
+clap_complete.workspace = true
+owo-colors.workspace = true
+globset.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ratatui.workspace = true
+notify.workspace = true
+open = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = "2.1"
+predicates = "3"
+tempfile = "3"
+httpmock = "0.7"
+
+# Homebrew formula name: `golden` (so `brew install andriiklymiuk/homebrew-tools/golden`).
+# golden-core is library-only; xtask-conformance has dist=false. golden-cli is the
+# sole distributable and produces both the `golden` and `gr` binaries.
+[package.metadata.dist]
+formula = "golden"

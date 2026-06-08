@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = ["crates/golden-core", "crates/golden-cli", "xtask-conformance"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "multipart"] }
+mime_guess = "2"
+rquickjs = { version = "0.6", features = ["loader", "macro"] }
+clap = { version = "4.6", features = ["derive"] }
+clap_complete = "4"
+owo-colors = { version = "4", features = ["supports-colors"] }
+globset = "0.4"
+ratatui = "0.29"
+notify = "6"
+tempfile = "3"
+open = "5"
+
+# The cargo profile cargo-dist builds release binaries with (`dist build --profile dist`).
+# `dist init` normally injects this; this workspace is hand-authored, so without it
+# every release build fails with `error: profile 'dist' is not defined`.
+[profile.dist]
+inherits = "release"
+lto = "thin"

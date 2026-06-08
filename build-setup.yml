@@ -1,0 +1,11 @@
+# github-build-setup snippet injected by cargo-dist into each build job.
+# This file is referenced by dist-workspace.toml [dist].github-build-setup.
+# Path in that field is relative to .github/workflows/, so the value is
+# "../../build-setup.yml" which resolves to this file at the repo root.
+#
+# Purpose: set LIBCLANG_PATH on Windows so rquickjs/bindgen can find libclang.
+# GitHub's windows-latest runner preinstalls LLVM at the path below.
+- name: Set LIBCLANG_PATH for rquickjs/bindgen (Windows)
+  if: runner.os == 'Windows'
+  shell: pwsh
+  run: echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV

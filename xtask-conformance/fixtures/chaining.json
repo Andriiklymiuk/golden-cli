@@ -1,0 +1,26 @@
+{
+  "info": { "name": "chaining", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+  "variable": [{ "key": "userId", "value": "" }],
+  "item": [
+    {
+      "name": "capture id",
+      "request": { "method": "GET", "url": "https://jsonplaceholder.typicode.com/users/1" },
+      "event": [
+        { "listen": "test", "script": { "exec": [
+          "pm.test('Status code is 200', function () { pm.response.to.have.status(200); });",
+          "pm.collectionVariables.set('userId', pm.response.json().id.toString());"
+        ] } }
+      ]
+    },
+    {
+      "name": "use id",
+      "request": { "method": "GET", "url": "https://jsonplaceholder.typicode.com/users/{{userId}}" },
+      "event": [
+        { "listen": "test", "script": { "exec": [
+          "pm.test('Status code is 200', function () { pm.response.to.have.status(200); });",
+          "pm.test('id matches', function () { pm.expect(pm.response.json().id.toString()).to.equal(pm.collectionVariables.get('userId')); });"
+        ] } }
+      ]
+    }
+  ]
+}

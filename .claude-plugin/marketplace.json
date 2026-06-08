@@ -1,0 +1,14 @@
+{
+  "name": "golden",
+  "owner": {
+    "name": "Andrii Klymiuk",
+    "url": "https://github.com/Andriiklymiuk"
+  },
+  "plugins": [
+    {
+      "name": "golden",
+      "source": "./plugins/golden",
+      "description": "AI skills for the golden CLI: run and test Postman v2.1 collections from the terminal and CI (with pretty/junit/json/tap reporters and exit codes a pipeline can branch on), author and debug pm.*/chai test scripts, fire a single request or turn one into a curl, import Postman/OpenAPI/curl/folder sources, and auto-generate per-service collections (REST + GraphQL, status-check or full) across a corgi-compose.yml / multi-repo workspace — all in the git-synced collections/ format shared with the Golden Retriever VS Code extension."
+    }
+  ]
+}
