@@ -1,7 +1,7 @@
 //! Bottom status bar: active env + keybinding hints + transient status text.
 
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
@@ -19,24 +19,35 @@ pub fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Pane::Request => " f field · e edit · Enter send · Tab panes · ? help · ^C quit ",
         Pane::Response => " ↑↓ scroll · t tab · Tab panes · ? help · ^C quit ",
     };
-    // In Confirm mode, the confirm message overrides the status line.
-    let left = if app.mode == crate::tui::app::Mode::Confirm {
-        if let Some(c) = &app.confirm {
-            format!(" {} ", c.message)
+    // First-open welcome banner (highlighted) takes the line until the first key.
+    // Then: Confirm message > transient status > context hints.
+    let (left, left_style) =
+        if app.show_welcome && app.mode == crate::tui::app::Mode::Normal && app.status.is_empty() {
+            (
+                " 👋 Welcome — ↑↓ pick a request · Enter to send · ? for help · ^C to quit "
+                    .to_string(),
+                Style::default()
+                    .bg(Color::Cyan)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else if app.mode == crate::tui::app::Mode::Confirm {
+            let msg = match &app.confirm {
+                Some(c) => format!(" {} ", c.message),
+                None => " (y/n) ".to_string(),
+            };
+            (msg, Style::default())
+        } else if app.status.is_empty() {
+            (hints.to_string(), Style::default())
         } else {
-            " (y/n) ".to_string()
-        }
-    } else if app.status.is_empty() {
-        hints.to_string()
-    } else {
-        format!(" {} ", app.status)
-    };
+            (format!(" {} ", app.status), Style::default())
+        };
     let line = Line::from(vec![
         Span::styled(
             format!("[env: {}] ", app.active_env),
             Style::default().fg(Color::Yellow),
         ),
-        Span::raw(left),
+        Span::styled(left, left_style),
     ]);
     frame.render_widget(
         Paragraph::new(line).style(Style::default().bg(Color::Black).fg(Color::White)),
@@ -78,6 +89,27 @@ mod tests {
             .map(|cell| cell.symbol().chars().next().unwrap_or(' '))
             .collect();
         assert!(content.contains("quit"), "should show key hints");
+    }
+
+    #[test]
+    fn status_bar_shows_welcome_on_first_open() {
+        let backend = TestBackend::new(120, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let app = empty_app(); // show_welcome = true from App::new
+        assert!(app.show_welcome);
+        terminal
+            .draw(|frame| draw_status_bar(frame, &app, frame.area()))
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let content: String = buf
+            .content()
+            .iter()
+            .map(|cell| cell.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            content.contains("Welcome"),
+            "first open should show welcome"
+        );
     }
 
     #[test]

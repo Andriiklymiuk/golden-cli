@@ -73,6 +73,9 @@ pub fn handle_key(
     run_handle: &mut Option<RunHandle>,
     workspace: &std::path::Path,
 ) {
+    // First keypress dismisses the welcome hint.
+    app.show_welcome = false;
+
     // Ctrl+C always quits, from any mode. In raw mode the terminal does NOT turn
     // Ctrl+C into a signal, so the app must handle it — otherwise it looks frozen.
     // This is the universal escape hatch (Esc only closes modals).
@@ -426,6 +429,23 @@ mod tests {
             );
             assert!(app.should_quit, "Ctrl+C should quit from mode {label}");
         }
+    }
+
+    #[test]
+    fn first_key_dismisses_welcome() {
+        let mut app = make_app(J);
+        assert!(app.show_welcome, "welcome shows on open");
+        handle_key(
+            &mut app,
+            key(KeyCode::Down),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert!(
+            !app.show_welcome,
+            "first keypress dismisses the welcome banner"
+        );
     }
 
     #[test]

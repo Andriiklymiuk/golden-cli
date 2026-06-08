@@ -157,6 +157,8 @@ pub struct App {
     pub request_tab: RequestTab,
     /// Index of the selected target collection in the MoveTarget picker.
     pub move_target_selected: usize,
+    /// First-open welcome hint; cleared on the first keypress.
+    pub show_welcome: bool,
 }
 
 impl App {
@@ -191,6 +193,7 @@ impl App {
             confirm: None,
             request_tab: RequestTab::Method,
             move_target_selected: 0,
+            show_welcome: true,
         };
         app.rebuild_rows();
         app
