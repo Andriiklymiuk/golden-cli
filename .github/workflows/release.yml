@@ -248,20 +248,41 @@ jobs:
           TAG="${{ needs.plan.outputs.tag }}"
           # Previous tag by version order, excluding the one being released.
           PREV=$(git tag --sort=-version:refname | grep -vFx "$TAG" | head -1 || true)
+
+          # Render a commit range, crediting the author's GitHub @handle instead
+          # of the bare git author name. Git has no notion of GitHub usernames, so
+          # we resolve each commit's `.author.login` via the API (cached by author
+          # email) and fall back to the git name when the email isn't linked to a
+          # GitHub account. @handles auto-link to profiles on the Release page.
+          declare -A HANDLE_CACHE
+          changelog() {
+            local sha short subj name email login author
+            while IFS=$'\t' read -r sha short subj name email; do
+              [ -z "$sha" ] && continue
+              login="${HANDLE_CACHE[$email]-__unset__}"
+              if [ "$login" = "__unset__" ]; then
+                login=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${sha}" --jq '.author.login // empty' 2>/dev/null || true)
+                HANDLE_CACHE[$email]="$login"
+              fi
+              if [ -n "$login" ]; then author="@${login}"; else author="$name"; fi
+              printf '%s\n' "- ${subj} ([\`${short}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${sha})) — ${author}"
+            done < <(git log --no-merges --pretty=format:'%H%x09%h%x09%s%x09%an%x09%ae' "$1")
+          }
+
           {
             echo "## golden $TAG"
             echo
             if [ -n "$PREV" ]; then
               echo "### Changes since [\`$PREV\`](https://github.com/${GITHUB_REPOSITORY}/releases/tag/$PREV)"
               echo
-              git log --no-merges --pretty=format:'- %s (\`%h\`) — %an' "$PREV..$TAG"
+              changelog "$PREV..$TAG"
               echo
               echo
               echo "**Full diff:** https://github.com/${GITHUB_REPOSITORY}/compare/$PREV...$TAG"
             else
               echo "### First release — all commits"
               echo
-              git log --no-merges --pretty=format:'- %s (\`%h\`) — %an' "$TAG"
+              changelog "$TAG"
             fi
             echo
             echo
