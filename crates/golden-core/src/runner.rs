@@ -111,7 +111,7 @@ pub fn run_with_options(
     bail: bool,
     data: &[HashMap<String, String>],
 ) -> RunResult {
-    run_inner(coll, scopes, iterations, cfg, bail, data, None)
+    run_inner(coll, scopes, iterations, cfg, bail, data, None, None)
 }
 
 /// As `run`, but a cooperative `cancel` flag (checked between requests) stops the run.
@@ -122,12 +122,46 @@ pub fn run_with_cancel(
     cfg: &HttpConfig,
     cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> RunResult {
-    run_inner(coll, scopes, iterations, cfg, false, &[], cancel.as_deref())
+    run_inner(
+        coll,
+        scopes,
+        iterations,
+        cfg,
+        false,
+        &[],
+        cancel.as_deref(),
+        None,
+    )
 }
 
-/// The shared run loop behind `run`/`run_with_bail`/`run_with_options`/`run_with_cancel`.
-/// `cancel`, when present, is checked between requests so an in-flight run can stop
-/// cooperatively.
+/// As `run_with_cancel`, plus a streaming `progress` callback invoked with the
+/// cumulative completed-request count after EACH request finishes — letting a
+/// long collection run report per-request progress as it goes.
+pub fn run_with_progress(
+    coll: &Collection,
+    scopes: &VarScopes,
+    iterations: u32,
+    cfg: &HttpConfig,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    progress: Option<&mut dyn FnMut(usize)>,
+) -> RunResult {
+    run_inner(
+        coll,
+        scopes,
+        iterations,
+        cfg,
+        false,
+        &[],
+        cancel.as_deref(),
+        progress,
+    )
+}
+
+/// The shared run loop behind `run`/`run_with_bail`/`run_with_options`/
+/// `run_with_cancel`/`run_with_progress`. `cancel`, when present, is checked
+/// between requests so an in-flight run can stop cooperatively. `progress`, when
+/// present, is called with the cumulative completed-request count after each
+/// request finishes.
 #[allow(clippy::too_many_arguments)]
 fn run_inner(
     coll: &Collection,
@@ -137,6 +171,7 @@ fn run_inner(
     bail: bool,
     data: &[HashMap<String, String>],
     cancel: Option<&std::sync::atomic::AtomicBool>,
+    mut progress: Option<&mut dyn FnMut(usize)>,
 ) -> RunResult {
     let engine = RquickJsEngine::new();
     let mut collection_result = CollectionResult {
@@ -212,6 +247,9 @@ fn run_inner(
                 cfg,
             );
             totals.requests += 1;
+            if let Some(p) = progress.as_deref_mut() {
+                p(totals.requests);
+            }
             if rr.error.is_some() || rr.status.map(|s| s >= 400).unwrap_or(true) {
                 totals.failed_requests += 1;
             }
@@ -1002,5 +1040,37 @@ mod tests {
             result.totals.requests, 0,
             "cancelled before first request runs"
         );
+    }
+
+    #[test]
+    fn run_with_progress_invokes_callback_once_per_request() {
+        let server = MockServer::start();
+        for p in ["/a", "/b", "/c"] {
+            server.mock(|when, then| {
+                when.path(p);
+                then.status(200);
+            });
+        }
+        let json = format!(
+            r#"{{"info":{{"name":"C"}},"item":[
+              {{"name":"a","request":{{"method":"GET","url":"{b}/a"}}}},
+              {{"name":"b","request":{{"method":"GET","url":"{b}/b"}}}},
+              {{"name":"c","request":{{"method":"GET","url":"{b}/c"}}}}]}}"#,
+            b = server.base_url()
+        );
+        let coll: Collection = serde_json::from_str(&json).unwrap();
+        let mut counts: Vec<usize> = Vec::new();
+        let mut cb = |done: usize| counts.push(done);
+        let result = run_with_progress(
+            &coll,
+            &VarScopes::default(),
+            1,
+            &HttpConfig::default(),
+            None,
+            Some(&mut cb),
+        );
+        // one callback per request, with strictly increasing cumulative counts.
+        assert_eq!(result.totals.requests, 3);
+        assert_eq!(counts, vec![1, 2, 3]);
     }
 }

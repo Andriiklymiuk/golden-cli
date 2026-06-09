@@ -18,6 +18,8 @@ fn tab_label(tab: RequestTab) -> &'static str {
         RequestTab::Url => "URL",
         RequestTab::Headers => "Headers",
         RequestTab::Body => "Body",
+        RequestTab::GraphqlQuery => "GQL Query",
+        RequestTab::GraphqlVariables => "GQL Vars",
         RequestTab::PreRequestScript => "Pre-req",
         RequestTab::TestScript => "Tests",
     }
@@ -72,24 +74,46 @@ pub fn draw_request(frame: &mut Frame, app: &App, area: Rect) {
                         format!("Body: {}", body.mode),
                         Style::default().add_modifier(Modifier::BOLD),
                     ));
-                    // body.raw is Option<serde_json::Value>: extract string preview
-                    let preview = match body.mode.as_str() {
-                        "graphql" => body
-                            .graphql
-                            .as_ref()
-                            .map(|g| g.query.clone())
-                            .unwrap_or_default(),
-                        _ => body
+                    if body.mode == "graphql" {
+                        // GraphQL body: show the query and its variables separately so
+                        // both editable fields are visible (f cycles to them, e edits).
+                        let gql = body.graphql.as_ref();
+                        lines.push(Line::styled("  Query", Style::default().fg(Color::Gray)));
+                        let query = gql.map(|g| g.query.as_str()).unwrap_or("");
+                        for l in query.lines().take(10) {
+                            lines.push(Line::raw(format!("    {l}")));
+                        }
+                        let vars = gql
+                            .and_then(|g| g.variables.as_ref())
+                            .map(|v| serde_json::to_string_pretty(v).unwrap_or_default())
+                            .unwrap_or_default();
+                        lines.push(Line::styled(
+                            "  Variables",
+                            Style::default().fg(Color::Gray),
+                        ));
+                        if vars.trim().is_empty() {
+                            lines.push(Line::styled(
+                                "    (none)",
+                                Style::default().fg(Color::DarkGray),
+                            ));
+                        } else {
+                            for l in vars.lines().take(8) {
+                                lines.push(Line::raw(format!("    {l}")));
+                            }
+                        }
+                    } else {
+                        // body.raw is Option<serde_json::Value>: extract string preview
+                        let preview = body
                             .raw
                             .as_ref()
                             .map(|v| match v {
                                 serde_json::Value::String(s) => s.clone(),
                                 other => other.to_string(),
                             })
-                            .unwrap_or_default(),
-                    };
-                    for l in preview.lines().take(12) {
-                        lines.push(Line::raw(format!("  {l}")));
+                            .unwrap_or_default();
+                        for l in preview.lines().take(12) {
+                            lines.push(Line::raw(format!("  {l}")));
+                        }
                     }
                 } else {
                     lines.push(Line::styled(
@@ -277,6 +301,52 @@ mod tests {
             .iter()
             .any(|c| c.fg == ratatui::style::Color::Cyan);
         assert!(has_cyan, "focused request pane should have cyan border");
+    }
+
+    const J_GQL: &str = r#"{
+      "info": { "name": "G" },
+      "item": [
+        { "name": "gql", "request": {
+          "method": "POST",
+          "url": "https://x/graphql",
+          "body": { "mode": "graphql", "graphql": {
+            "query": "query Me { me { id } }",
+            "variables": { "limit": 5 }
+          }}
+        }}
+      ]
+    }"#;
+
+    #[test]
+    fn request_pane_renders_graphql_query_and_variables() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = make_app(J_GQL);
+        app.selected = 1; // gql request
+        terminal
+            .draw(|frame| draw_request(frame, &app, frame.area()))
+            .unwrap();
+        let content = buf_content(&terminal);
+        assert!(
+            content.contains("graphql"),
+            "should show graphql body mode, got: {content}"
+        );
+        assert!(
+            content.contains("Query"),
+            "should label the GraphQL query, got: {content}"
+        );
+        assert!(
+            content.contains("Variables"),
+            "should label the GraphQL variables, got: {content}"
+        );
+        assert!(
+            content.contains("query Me"),
+            "should render the query text, got: {content}"
+        );
+        assert!(
+            content.contains("limit"),
+            "should render the variables, got: {content}"
+        );
     }
 
     #[test]

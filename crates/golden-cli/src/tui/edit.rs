@@ -68,13 +68,26 @@ impl EditSession {
                 }
             }
             EditField::GraphqlQuery => {
-                store::set_graphql_body(&mut coll.item, &self.path, &self.buffer, None)
+                // Preserve any existing variables so editing the query in isolation
+                // doesn't drop them.
+                let existing_vars = existing_graphql_variables_json(coll, &self.path);
+                store::set_graphql_body(
+                    &mut coll.item,
+                    &self.path,
+                    &self.buffer,
+                    existing_vars.as_deref(),
+                )
             }
             EditField::GraphqlVariables => {
-                // Variables are only meaningful alongside a query.
-                // Applying them in isolation is a no-op here; the App wires this
-                // together when both query and variables need updating.
-                Ok(())
+                // Variables are only meaningful alongside a query: preserve the
+                // existing query and apply the edited variables onto it.
+                let existing_query = existing_graphql_query(coll, &self.path);
+                let vars = if self.buffer.trim().is_empty() {
+                    None
+                } else {
+                    Some(self.buffer.as_str())
+                };
+                store::set_graphql_body(&mut coll.item, &self.path, &existing_query, vars)
             }
             EditField::PreRequestScript => store::set_script(
                 &mut coll.item,
@@ -89,6 +102,23 @@ impl EditSession {
                 &split_lines(&self.buffer),
             ),
         }
+    }
+}
+
+/// Read the request's existing GraphQL query at `path` (empty if absent), so a
+/// variables-only edit can re-apply it alongside the new variables.
+fn existing_graphql_query(coll: &Collection, path: &[usize]) -> String {
+    initial_text_for(coll, path, &EditField::GraphqlQuery)
+}
+
+/// Read the request's existing GraphQL variables at `path` as a JSON string,
+/// or None if there are none — so a query-only edit can preserve them.
+fn existing_graphql_variables_json(coll: &Collection, path: &[usize]) -> Option<String> {
+    let s = initial_text_for(coll, path, &EditField::GraphqlVariables);
+    if s.trim().is_empty() {
+        None
+    } else {
+        Some(s)
     }
 }
 
@@ -263,14 +293,76 @@ mod tests {
     }
 
     #[test]
-    fn commit_graphql_variables_is_noop() {
+    fn commit_graphql_variables_persists_onto_existing_query() {
         let mut c = coll();
-        let before = serde_json::to_string(&c).unwrap();
-        let s = EditSession::new(EditField::GraphqlVariables, vec![0], r#"{"x":1}"#.into());
-        s.commit(&mut c).unwrap();
-        // The collection is unchanged because GraphqlVariables alone is a no-op.
-        let after = serde_json::to_string(&c).unwrap();
-        assert_eq!(before, after);
+        // First set a query so variables have a query to attach to.
+        EditSession::new(EditField::GraphqlQuery, vec![0], "{ me { id } }".into())
+            .commit(&mut c)
+            .unwrap();
+        // Now edit only the variables.
+        EditSession::new(EditField::GraphqlVariables, vec![0], r#"{"x":1}"#.into())
+            .commit(&mut c)
+            .unwrap();
+        let body = c.item[0].request.as_ref().unwrap().body.as_ref().unwrap();
+        assert_eq!(body.mode, "graphql");
+        let g = body.graphql.as_ref().unwrap();
+        // Query must be preserved, variables applied.
+        assert_eq!(g.query, "{ me { id } }");
+        assert_eq!(g.variables.as_ref().unwrap()["x"], 1);
+    }
+
+    #[test]
+    fn commit_graphql_query_preserves_existing_variables() {
+        let mut c = coll();
+        // Seed a graphql body with variables.
+        store::set_graphql_body(&mut c.item, &[0], "{ a }", Some(r#"{"k":"v"}"#)).unwrap();
+        // Edit only the query.
+        EditSession::new(EditField::GraphqlQuery, vec![0], "{ b }".into())
+            .commit(&mut c)
+            .unwrap();
+        let g = c.item[0]
+            .request
+            .as_ref()
+            .unwrap()
+            .body
+            .as_ref()
+            .unwrap()
+            .graphql
+            .as_ref()
+            .unwrap();
+        assert_eq!(g.query, "{ b }");
+        // Variables survive a query-only edit.
+        assert_eq!(g.variables.as_ref().unwrap()["k"], "v");
+    }
+
+    #[test]
+    fn commit_graphql_variables_empty_clears_variables_keeps_query() {
+        let mut c = coll();
+        store::set_graphql_body(&mut c.item, &[0], "{ a }", Some(r#"{"k":"v"}"#)).unwrap();
+        // Clear variables with an empty buffer.
+        EditSession::new(EditField::GraphqlVariables, vec![0], "".into())
+            .commit(&mut c)
+            .unwrap();
+        let g = c.item[0]
+            .request
+            .as_ref()
+            .unwrap()
+            .body
+            .as_ref()
+            .unwrap()
+            .graphql
+            .as_ref()
+            .unwrap();
+        assert_eq!(g.query, "{ a }");
+        assert!(g.variables.is_none());
+    }
+
+    #[test]
+    fn commit_graphql_variables_bad_json_returns_error() {
+        let mut c = coll();
+        store::set_graphql_body(&mut c.item, &[0], "{ a }", None).unwrap();
+        let s = EditSession::new(EditField::GraphqlVariables, vec![0], "not json".into());
+        assert!(s.commit(&mut c).is_err());
     }
 
     #[test]

@@ -1,16 +1,21 @@
 //! Response search: case-insensitive substring filter over rendered lines.
 
+/// Whether `line` matches `query` (case-insensitive substring). An empty query
+/// matches every line, so callers fall back to showing everything unfiltered.
+pub fn matches(line: &str, query: &str) -> bool {
+    query.is_empty() || line.to_lowercase().contains(&query.to_lowercase())
+}
+
 /// Keep only lines (with their original 0-based index) containing `query`
 /// (case-insensitive). Empty query returns all lines unfiltered.
 pub fn filter_lines(lines: &[String], query: &str) -> Vec<(usize, String)> {
     if query.is_empty() {
         return lines.iter().cloned().enumerate().collect();
     }
-    let needle = query.to_lowercase();
     lines
         .iter()
         .enumerate()
-        .filter(|(_, l)| l.to_lowercase().contains(&needle))
+        .filter(|(_, l)| matches(l, query))
         .map(|(i, l)| (i, l.clone()))
         .collect()
 }
@@ -44,5 +49,13 @@ mod tests {
         assert_eq!(out[0].0, 1);
         assert!(out[0].1.contains("Alice"));
         assert_eq!(match_count(&sample(), "i"), 3); // id, Alice, admin all contain 'i'
+    }
+
+    #[test]
+    fn matches_is_case_insensitive_and_empty_query_matches_all() {
+        assert!(matches("\"name\": \"Alice\"", "alice"));
+        assert!(matches("\"name\": \"Alice\"", "ALICE"));
+        assert!(!matches("\"name\": \"Alice\"", "bob"));
+        assert!(matches("anything", "")); // empty query matches everything
     }
 }

@@ -11,6 +11,8 @@ pub struct RunState {
     pub total: usize,
     /// Requests completed so far.
     pub done: usize,
+    /// Iteration count this run was launched with (>= 1).
+    pub iterations: u32,
     /// Finished result (None until the run completes).
     pub result: Option<RunResult>,
 }
@@ -115,6 +117,7 @@ mod tests {
             running: false,
             total: 3,
             done: 3,
+            iterations: 1,
             result: Some(result_with(vec![
                 rr("ok", Some(200), true, None),
                 rr("bad-status", Some(500), true, None),

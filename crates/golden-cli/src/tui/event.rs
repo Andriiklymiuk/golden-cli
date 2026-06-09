@@ -47,14 +47,27 @@ pub fn drain_send(app: &mut App, handle: &mut Option<SendHandle>) -> bool {
     }
 }
 
-/// Drain any pending message from the run worker and update App state.
+/// Drain pending messages from the run worker and update App state. Streamed
+/// `Progress` messages advance `app.run.done` so the gauge moves during the run;
+/// the terminal `Done` message clears the handle and records the result.
 pub fn drain_run(app: &mut App, handle: &mut Option<RunHandle>) {
     let Some(h) = handle else { return };
-    if let Ok(RunMsg::Done(result)) = h.rx.try_recv() {
-        app.run.done = app.run.total;
-        app.run.running = false;
-        app.run.result = Some(result);
-        *handle = None;
+    // Drain every queued message this tick so the gauge tracks the latest count
+    // (a fast run can emit several Progress messages between draws).
+    loop {
+        match h.rx.try_recv() {
+            Ok(RunMsg::Progress(done)) => {
+                app.run.done = done.min(app.run.total);
+            }
+            Ok(RunMsg::Done(result)) => {
+                app.run.done = app.run.total;
+                app.run.running = false;
+                app.run.result = Some(result);
+                *handle = None;
+                return;
+            }
+            Err(_) => return,
+        }
     }
 }
 
@@ -72,15 +85,44 @@ fn send_current(app: &mut App, send_handle: &mut Option<SendHandle>) {
         app.status = "sending\u{2026}".into();
         app.last_assertions.clear();
         app.last_script_error = None;
+        let workspace = app.collections_dir.clone();
         *send_handle = Some(spawn_send(
             coll,
             target_path,
             app.scopes.clone(),
             crate::tui::worker::tui_http_config(),
+            workspace,
         ));
     } else {
         app.status = "select a request first".into();
     }
+}
+
+/// Replay the history entry highlighted in the History overlay by re-sending it
+/// through the existing send worker. Wraps the entry in a synthetic single-item
+/// collection (target_path `[0]`) so it reuses the same code path as `s`/Enter,
+/// then closes the overlay so the response surfaces.
+fn replay_selected_history(app: &mut App, send_handle: &mut Option<SendHandle>) {
+    if app.sending {
+        return;
+    }
+    let Some(coll) = app.history_replay_collection() else {
+        app.status = "no history entry to replay".into();
+        return;
+    };
+    app.sending = true;
+    app.status = "replaying\u{2026}".into();
+    app.last_assertions.clear();
+    app.last_script_error = None;
+    app.mode = Mode::Normal;
+    let workspace = app.collections_dir.clone();
+    *send_handle = Some(spawn_send(
+        coll,
+        vec![0],
+        app.scopes.clone(),
+        crate::tui::worker::tui_http_config(),
+        workspace,
+    ));
 }
 
 /// Run the node under the cursor: a request runs (with its tests), a folder runs
@@ -133,19 +175,26 @@ fn start_run(
     if app.run.running || run_handle.is_some() {
         return;
     }
-    let total: usize = colls.iter().map(crate::tui::worker::count_requests).sum();
+    let iterations = app.run_iterations.max(1);
+    // Each leaf request runs once per iteration, so the expected total scales
+    // with the iteration count (keeps the gauge in sync with live progress).
+    let per_iter: usize = colls.iter().map(crate::tui::worker::count_requests).sum();
+    let total = per_iter * iterations as usize;
     app.run = crate::tui::run_state::RunState {
         running: true,
         total,
         done: 0,
+        iterations,
         result: None,
     };
     app.mode = Mode::Run;
+    let workspace = app.collections_dir.clone();
     *run_handle = Some(crate::tui::worker::spawn_run(
         colls,
         app.scopes.clone(),
-        1,
+        iterations,
         crate::tui::worker::tui_http_config(),
+        workspace,
     ));
 }
 
@@ -183,6 +232,9 @@ pub fn handle_key(
         if app.mode == Mode::Confirm {
             app.confirm = None;
             app.status = "cancelled".into();
+        }
+        if app.mode == Mode::MoveFolder {
+            app.move_pending = None;
         }
         if app.mode == Mode::Run {
             // Cancel an *in-flight* run (checked between requests) and report it.
@@ -307,9 +359,45 @@ pub fn handle_key(
             }
             KeyCode::Enter => {
                 let target = app.move_target_selected;
-                app.mode = crate::tui::app::Mode::Normal;
-                app.move_to_collection(target);
+                // Open the destination-folder picker (drops straight to root when
+                // the target collection has no folders).
+                app.begin_move_to_collection(target);
             }
+            _ => {}
+        }
+        return;
+    }
+
+    // MoveFolder mode key handling (folder picker within the destination collection).
+    if app.mode == crate::tui::app::Mode::MoveFolder {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => app.move_folder_select_next(),
+            KeyCode::Char('k') | KeyCode::Up => app.move_folder_select_prev(),
+            KeyCode::Enter => app.confirm_move_to_folder(),
+            _ => {}
+        }
+        return;
+    }
+
+    // Variables mode key handling (collection variable manager).
+    if app.mode == Mode::Variables {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => app.var_select_next(),
+            KeyCode::Char('k') | KeyCode::Up => app.var_select_prev(),
+            KeyCode::Char('a') => app.open_add_variable_prompt(),
+            KeyCode::Char('e') => app.open_edit_variable_prompt(),
+            KeyCode::Char('d') => app.start_delete_variable_confirm(),
+            _ => {}
+        }
+        return;
+    }
+
+    // History overlay key handling (j/k to navigate, Enter to replay).
+    if app.mode == Mode::History {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => app.history_select_next(),
+            KeyCode::Char('k') | KeyCode::Up => app.history_select_prev(),
+            KeyCode::Enter => replay_selected_history(app, send_handle),
             _ => {}
         }
         return;
@@ -387,10 +475,26 @@ pub fn handle_key(
             }
         }
         KeyCode::Char('t') => app.next_response_tab(),
+        // `C` = generate a curl command for the selected request, copy it to the
+        // clipboard, and show it in the Curl overlay.
+        KeyCode::Char('C') => app.copy_curl_to_clipboard(),
+        // `o` = open the most recent response body in the browser (send --open path).
+        KeyCode::Char('o') => app.open_response_in_browser(),
+        // `w` = save the current response to disk (prompts for a path; reuses the
+        // streamed download path when a request is selected, else writes cached bytes).
+        KeyCode::Char('w') => {
+            app.open_download_prompt();
+        }
+        // `i` = import a source (path + optional --from) into collections/, then reload.
+        KeyCode::Char('i') => {
+            app.open_import_prompt();
+        }
         KeyCode::Char('x') => {
             app.refresh_env_profiles(workspace);
             app.mode = Mode::EnvSwitch;
         }
+        // `H` = open the request-history overlay (j/k navigate, Enter to replay).
+        KeyCode::Char('H') => app.open_history(workspace),
         KeyCode::Char('/') => app.mode = Mode::Search,
         KeyCode::Char('?') => app.mode = Mode::Help,
         // Cycle the focused request field (Method → Url → Headers → Body → Scripts).
@@ -411,6 +515,14 @@ pub fn handle_key(
             if !app.open_add_folder_prompt() {
                 app.status = "select a collection or folder first".into();
             }
+        }
+        // `N` = create a new top-level collection (always available).
+        KeyCode::Char('N') => {
+            app.open_create_collection_prompt();
+        }
+        // `v` = manage the selected collection's variables (add/edit/delete).
+        KeyCode::Char('v') if app.focus == Pane::Tree => {
+            app.open_variables();
         }
         KeyCode::Char('d') if app.focus == Pane::Tree => {
             if !app.start_delete_confirm() {
@@ -446,6 +558,16 @@ pub fn handle_key(
                 .map(|c| c.collection.clone())
                 .collect();
             start_run(app, run_handle, colls);
+        }
+        // `+` / `-` adjust the iteration count used for the NEXT run (default 1).
+        // `=` is accepted too since `+` is Shift+= on most layouts.
+        KeyCode::Char('+') | KeyCode::Char('=') => {
+            app.run_iterations = app.run_iterations.saturating_add(1).max(1);
+            app.status = format!("run iterations: {}", app.run_iterations);
+        }
+        KeyCode::Char('-') => {
+            app.run_iterations = app.run_iterations.saturating_sub(1).max(1);
+            app.status = format!("run iterations: {}", app.run_iterations);
         }
         _ => {}
     }
@@ -861,6 +983,73 @@ mod tests {
         assert_eq!(app.response_tab, ResponseTab::Body);
     }
 
+    #[test]
+    fn capital_c_opens_curl_overlay_on_request_row() {
+        use crate::tui::app::Mode;
+        let mut app = make_app(J);
+        app.selected = 2; // "login" request
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('C')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.mode, Mode::Curl, "C should open the curl overlay");
+        assert!(
+            app.curl_text.starts_with("curl -X POST"),
+            "curl_text should be populated, got: {}",
+            app.curl_text
+        );
+    }
+
+    #[test]
+    fn esc_closes_curl_overlay() {
+        use crate::tui::app::Mode;
+        let mut app = make_app(J);
+        app.mode = Mode::Curl;
+        app.curl_text = "curl -X GET 'http://x'".into();
+        handle_key(
+            &mut app,
+            key(KeyCode::Esc),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.mode, Mode::Normal, "esc should close the curl overlay");
+    }
+
+    #[test]
+    fn capital_c_on_folder_row_does_not_open_overlay() {
+        use crate::tui::app::Mode;
+        let mut app = make_app(J);
+        app.selected = 0; // collection header — not a request
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('C')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.status, "select a request first");
+    }
+
+    #[test]
+    fn o_without_response_sets_status_and_stays_normal() {
+        use crate::tui::app::Mode;
+        let mut app = make_app(J);
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('o')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.status, "no response to open");
+    }
+
     fn outcome_ok(status: u16) -> golden_core::runner::SingleOutcome {
         golden_core::runner::SingleOutcome {
             response: Some(golden_core::http::HttpResponse {
@@ -1084,6 +1273,94 @@ mod tests {
     }
 
     #[test]
+    fn plus_minus_adjust_run_iterations_clamped_at_one() {
+        let mut app = make_app(J);
+        assert_eq!(app.run_iterations, 1, "default iterations is 1");
+        // `+` bumps it.
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('+')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.run_iterations, 2);
+        assert!(app.status.contains("iterations: 2"));
+        // `=` also bumps (Shift+= sends '+' on most layouts, but bare '=' works too).
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('=')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.run_iterations, 3);
+        // `-` lowers it.
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('-')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.run_iterations, 2);
+        // `-` never drops below 1.
+        for _ in 0..5 {
+            handle_key(
+                &mut app,
+                key(KeyCode::Char('-')),
+                &mut None,
+                &mut None,
+                std::path::Path::new("/tmp"),
+            );
+        }
+        assert_eq!(app.run_iterations, 1, "iterations clamp at 1");
+    }
+
+    #[test]
+    fn run_iterations_are_threaded_into_start_run_total_and_state() {
+        use crate::tui::app::Mode;
+        // J's collection has 2 leaf requests (login + ping). With 3 iterations the
+        // expected total must scale to 6, and run.iterations must be recorded.
+        let mut app = make_app(J);
+        app.run_iterations = 3;
+        app.selected = 0; // collection header → runs the whole collection
+        let mut run_handle = None;
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('r')),
+            &mut None,
+            &mut run_handle,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.mode, Mode::Run);
+        assert!(run_handle.is_some());
+        assert_eq!(app.run.iterations, 3, "run.iterations records the count");
+        assert_eq!(
+            app.run.total, 6,
+            "total = 2 requests × 3 iterations, got {}",
+            app.run.total
+        );
+    }
+
+    #[test]
+    fn default_run_uses_single_iteration_total() {
+        // Sanity: with the default (1) iteration the total is unscaled.
+        let mut app = make_app(J);
+        app.selected = 0;
+        let mut run_handle = None;
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('r')),
+            &mut None,
+            &mut run_handle,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.run.iterations, 1);
+        assert_eq!(app.run.total, 2, "2 requests × 1 iteration");
+    }
+
+    #[test]
     fn capital_r_opens_run_overlay_for_all_collections() {
         use crate::tui::app::Mode;
         let mut app = make_app(J);
@@ -1177,6 +1454,80 @@ mod tests {
         drain_run(&mut app, &mut handle);
         assert!(!app.run.running);
         assert_eq!(app.run.done, 3);
+        assert!(app.run.result.is_some());
+        assert!(handle.is_none());
+    }
+
+    #[test]
+    fn drain_run_advances_done_on_progress_without_clearing_handle() {
+        use std::sync::mpsc;
+
+        let (tx, rx) = mpsc::channel::<RunMsg>();
+        // Two streamed progress steps, no Done yet.
+        tx.send(RunMsg::Progress(1)).unwrap();
+        tx.send(RunMsg::Progress(2)).unwrap();
+
+        let mut app = make_app(J);
+        app.run.running = true;
+        app.run.total = 4;
+        let mut handle: Option<RunHandle> = Some(RunHandle {
+            rx,
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            join: None,
+        });
+        drain_run(&mut app, &mut handle);
+        // Both queued progress messages are drained in one tick → done = latest (2).
+        assert_eq!(app.run.done, 2, "gauge should advance to the latest count");
+        assert!(app.run.running, "run still in flight until Done");
+        assert!(handle.is_some(), "handle kept until Done arrives");
+    }
+
+    #[test]
+    fn drain_run_clamps_progress_to_total() {
+        use std::sync::mpsc;
+
+        let (tx, rx) = mpsc::channel::<RunMsg>();
+        tx.send(RunMsg::Progress(99)).unwrap();
+
+        let mut app = make_app(J);
+        app.run.running = true;
+        app.run.total = 3;
+        let mut handle: Option<RunHandle> = Some(RunHandle {
+            rx,
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            join: None,
+        });
+        drain_run(&mut app, &mut handle);
+        assert_eq!(app.run.done, 3, "progress must not exceed total");
+    }
+
+    #[test]
+    fn drain_run_progress_then_done_finalizes() {
+        use golden_core::result::{RunResult, Totals};
+        use std::sync::mpsc;
+
+        let (tx, rx) = mpsc::channel::<RunMsg>();
+        tx.send(RunMsg::Progress(1)).unwrap();
+        tx.send(RunMsg::Done(RunResult {
+            collections: vec![],
+            totals: Totals {
+                requests: 2,
+                ..Default::default()
+            },
+        }))
+        .unwrap();
+
+        let mut app = make_app(J);
+        app.run.running = true;
+        app.run.total = 2;
+        let mut handle: Option<RunHandle> = Some(RunHandle {
+            rx,
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            join: None,
+        });
+        drain_run(&mut app, &mut handle);
+        assert!(!app.run.running);
+        assert_eq!(app.run.done, app.run.total);
         assert!(app.run.result.is_some());
         assert!(handle.is_none());
     }
@@ -1601,6 +1952,114 @@ mod tests {
         let session = app.edit.as_ref().unwrap();
         assert_eq!(session.field, EditField::Url);
         assert_eq!(session.buffer, "http://x/ping");
+    }
+
+    /// J_GQL_FLAT: a top-level request with a graphql body (row 1, path=[0,0]).
+    const J_GQL_FLAT: &str = r#"{
+      "info": { "name": "G" },
+      "item": [
+        { "name": "gql", "request": {
+          "method": "POST",
+          "url": "http://x/graphql",
+          "body": { "mode": "graphql", "graphql": { "query": "{ me { id } }" } }
+        }}
+      ]
+    }"#;
+
+    #[test]
+    fn e_on_graphql_query_tab_opens_graphql_query_editor() {
+        use crate::tui::app::{Mode, RequestTab};
+        use crate::tui::edit::EditField;
+        let (mut app, _dir) = make_app_with_file(J_GQL_FLAT);
+        app.selected = 1;
+        app.request_tab = RequestTab::GraphqlQuery;
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('e')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.mode, Mode::Edit);
+        let session = app.edit.as_ref().unwrap();
+        assert_eq!(session.field, EditField::GraphqlQuery);
+        assert_eq!(session.buffer, "{ me { id } }");
+    }
+
+    #[test]
+    fn f_cycles_into_graphql_tabs_when_body_is_graphql() {
+        use crate::tui::app::RequestTab;
+        let (mut app, _dir) = make_app_with_file(J_GQL_FLAT);
+        app.selected = 1;
+        app.request_tab = RequestTab::Body;
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('f')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.request_tab, RequestTab::GraphqlQuery);
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('f')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.request_tab, RequestTab::GraphqlVariables);
+    }
+
+    #[test]
+    fn graphql_variables_edit_persists_to_disk() {
+        use crate::tui::app::{Mode, RequestTab};
+        use golden_core::store::load_collection;
+        let (mut app, dir) = make_app_with_file(J_GQL_FLAT);
+        let coll_path = dir.path().join("coll.json");
+        app.selected = 1;
+        app.request_tab = RequestTab::GraphqlVariables;
+        // Open the variables editor (buffer starts empty — no variables yet).
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('e')),
+            &mut None,
+            &mut None,
+            dir.path(),
+        );
+        assert_eq!(app.mode, Mode::Edit);
+        // Type a JSON object.
+        for ch in r#"{"x":1}"#.chars() {
+            handle_key(
+                &mut app,
+                key(KeyCode::Char(ch)),
+                &mut None,
+                &mut None,
+                dir.path(),
+            );
+        }
+        handle_key(
+            &mut app,
+            key(KeyCode::Enter),
+            &mut None,
+            &mut None,
+            dir.path(),
+        );
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.status, "saved");
+        // The query is preserved and the variables persisted on disk.
+        let reloaded = load_collection(&coll_path).unwrap();
+        let g = reloaded.item[0]
+            .request
+            .as_ref()
+            .unwrap()
+            .body
+            .as_ref()
+            .unwrap()
+            .graphql
+            .as_ref()
+            .unwrap();
+        assert_eq!(g.query, "{ me { id } }");
+        assert_eq!(g.variables.as_ref().unwrap()["x"], 1);
     }
 
     #[test]
@@ -2184,5 +2643,308 @@ mod tests {
         );
         assert_eq!(app.prompt.as_ref().unwrap().buffer, "h");
         assert_eq!(app.mode, Mode::Prompt);
+    }
+
+    // ── request history overlay ───────────────────────────────────────────
+
+    fn hist_entry(method: &str, url: &str) -> golden_core::history::HistoryEntry {
+        golden_core::history::HistoryEntry {
+            timestamp: "2026-06-09T00:00:00Z".into(),
+            method: method.into(),
+            url: url.into(),
+            request_headers: vec![],
+            request_body: None,
+            status: Some(200),
+            time_ms: 4,
+        }
+    }
+
+    #[test]
+    fn shift_h_opens_history_overlay_loading_entries() {
+        use tempfile::tempdir;
+        let ws = tempdir().unwrap();
+        golden_core::history::append(ws.path(), hist_entry("GET", "https://api.test/a"), false)
+            .unwrap();
+        golden_core::history::append(ws.path(), hist_entry("POST", "https://api.test/b"), false)
+            .unwrap();
+
+        let mut app = make_app(J);
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('H')),
+            &mut None,
+            &mut None,
+            ws.path(),
+        );
+        assert_eq!(app.mode, Mode::History);
+        assert_eq!(app.history.len(), 2);
+        // newest entry highlighted first
+        assert_eq!(
+            app.selected_history_entry().unwrap().url,
+            "https://api.test/b"
+        );
+    }
+
+    #[test]
+    fn history_overlay_j_k_navigate() {
+        let mut app = make_app(J);
+        app.history = vec![
+            hist_entry("GET", "https://api.test/old"),
+            hist_entry("GET", "https://api.test/new"),
+        ];
+        app.history_selected = 0;
+        app.mode = Mode::History;
+        // j moves toward older entries
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('j')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(
+            app.selected_history_entry().unwrap().url,
+            "https://api.test/old"
+        );
+        // k moves back to the newest
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('k')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(
+            app.selected_history_entry().unwrap().url,
+            "https://api.test/new"
+        );
+        assert_eq!(app.mode, Mode::History, "navigation keeps the overlay open");
+    }
+
+    #[test]
+    fn history_overlay_enter_replays_and_closes() {
+        let mut app = make_app(J);
+        app.history = vec![hist_entry("GET", "https://api.test/replay")];
+        app.history_selected = 0;
+        app.mode = Mode::History;
+        let mut handle: Option<SendHandle> = None;
+        handle_key(
+            &mut app,
+            key(KeyCode::Enter),
+            &mut handle,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert!(app.sending, "Enter should start a replay send");
+        assert!(
+            handle.is_some(),
+            "a send handle should be spawned for replay"
+        );
+        assert_eq!(app.mode, Mode::Normal, "replay closes the overlay");
+    }
+
+    #[test]
+    fn history_overlay_esc_closes() {
+        let mut app = make_app(J);
+        app.history = vec![hist_entry("GET", "https://api.test/x")];
+        app.mode = Mode::History;
+        handle_key(
+            &mut app,
+            key(KeyCode::Esc),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    // ── download (w) + import (i) prompts ──────────────────────────────────
+
+    #[test]
+    fn w_with_response_opens_save_prompt() {
+        let mut app = make_app(J);
+        app.last_response = Some(golden_core::http::HttpResponse {
+            status: 200,
+            headers: vec![("content-type".into(), "application/json".into())],
+            body: b"{}".to_vec(),
+            time_ms: 1,
+        });
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('w')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.mode, Mode::Prompt, "w should open the save prompt");
+        assert!(matches!(
+            app.prompt.as_ref().unwrap().op,
+            crate::tui::app::PromptOp::DownloadResponse { .. }
+        ));
+    }
+
+    #[test]
+    fn w_without_response_sets_status_and_stays_normal() {
+        let mut app = make_app(J);
+        assert!(app.last_response.is_none());
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('w')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.status, "no response to save");
+    }
+
+    #[test]
+    fn i_opens_import_prompt() {
+        let mut app = make_app(J);
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('i')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.mode, Mode::Prompt, "i should open the import prompt");
+        assert!(matches!(
+            app.prompt.as_ref().unwrap().op,
+            crate::tui::app::PromptOp::Import { .. }
+        ));
+    }
+
+    // ── create-collection reachability (parity item a) ──────────────────────
+
+    #[test]
+    fn shift_n_opens_create_collection_prompt() {
+        let (mut app, _dir) = make_app_crud(J_EMPTY);
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('N')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(
+            app.mode,
+            Mode::Prompt,
+            "N should open the create-collection prompt"
+        );
+        assert!(matches!(
+            app.prompt.as_ref().unwrap().op,
+            crate::tui::app::PromptOp::CreateCollection { .. }
+        ));
+    }
+
+    // ── variable-manager reachability (parity item b) ───────────────────────
+
+    #[test]
+    fn v_opens_variable_manager_in_tree_pane() {
+        let (mut app, _dir) = make_app_crud(J_ONE);
+        app.selected = 0;
+        // focus is Pane::Tree by default
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('v')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(
+            app.mode,
+            Mode::Variables,
+            "v should open the variable manager"
+        );
+        assert_eq!(app.var_ci, 0);
+    }
+
+    #[test]
+    fn variable_manager_a_key_opens_add_prompt() {
+        let (mut app, _dir) = make_app_crud(J_ONE);
+        app.selected = 0;
+        app.open_variables();
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('a')),
+            &mut None,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.mode, Mode::Prompt);
+        assert!(matches!(
+            app.prompt.as_ref().unwrap().op,
+            crate::tui::app::PromptOp::SetVariable { edit_key: None, .. }
+        ));
+    }
+
+    // ── move-to-folder reachability (parity item c) ─────────────────────────
+
+    #[test]
+    fn move_folder_picker_enter_executes_move() {
+        use std::fs;
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let src_path = dir.path().join("c0.json");
+        let dst_path = dir.path().join("c1.json");
+        let src_json = r#"{"info":{"name":"Src"},"item":[{"name":"ping","request":{"method":"GET","url":"https://x/ping"}}]}"#;
+        let dst_json = r#"{"info":{"name":"Dst"},"item":[{"name":"auth","item":[]}]}"#;
+        fs::write(&src_path, src_json).unwrap();
+        fs::write(&dst_path, dst_json).unwrap();
+        let lc0 = crate::tui::loader::LoadedCollection {
+            path: src_path.clone(),
+            collection: serde_json::from_str(src_json).unwrap(),
+        };
+        let lc1 = crate::tui::loader::LoadedCollection {
+            path: dst_path.clone(),
+            collection: serde_json::from_str(dst_json).unwrap(),
+        };
+        let mut app = App::new(dir.path().into(), vec![lc0, lc1], VarScopes::default());
+        app.selected = 1; // "ping" in Src
+        app.focus = Pane::Tree;
+
+        // m → MoveTarget picker.
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('m')),
+            &mut None,
+            &mut None,
+            dir.path(),
+        );
+        assert_eq!(app.mode, crate::tui::app::Mode::MoveTarget);
+        // Pre-selected target is the other collection (index 1).
+        assert_eq!(app.move_target_selected, 1);
+
+        // Enter → opens the folder picker (Dst has the "auth" folder).
+        handle_key(
+            &mut app,
+            key(KeyCode::Enter),
+            &mut None,
+            &mut None,
+            dir.path(),
+        );
+        assert_eq!(app.mode, crate::tui::app::Mode::MoveFolder);
+
+        // j to select "auth" (index 1), Enter to confirm the move.
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('j')),
+            &mut None,
+            &mut None,
+            dir.path(),
+        );
+        handle_key(
+            &mut app,
+            key(KeyCode::Enter),
+            &mut None,
+            &mut None,
+            dir.path(),
+        );
+        assert_eq!(app.mode, Mode::Normal);
+
+        let dst = golden_core::store::load_collection(&dst_path).unwrap();
+        let auth = dst.item.iter().find(|i| i.name == "auth").unwrap();
+        assert_eq!(auth.item.as_ref().unwrap()[0].name, "ping");
     }
 }

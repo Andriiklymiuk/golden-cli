@@ -21,6 +21,7 @@ ratatui = "0.29"
 notify = "6"
 tempfile = "3"
 open = "5"
+arboard = "3"
 
 # The cargo profile cargo-dist builds release binaries with (`dist build --profile dist`).
 # `dist init` normally injects this; this workspace is hand-authored, so without it

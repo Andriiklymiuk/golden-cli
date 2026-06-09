@@ -90,7 +90,23 @@ pub fn draw_response(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn tab_content(app: &App) -> Vec<Line<'static>> {
+/// Concatenated plain text of a rendered line, used to match the search query
+/// against styled lines (Cookies / Tests) the same way as the raw Body/Headers.
+fn line_text(line: &Line<'static>) -> String {
+    line.spans.iter().map(|s| s.content.as_ref()).collect()
+}
+
+/// Number of lines in the current tab that match the active search query. Used
+/// by the search bar to show "/query (N matches)".
+pub fn match_count(app: &App) -> usize {
+    unfiltered_lines(app)
+        .iter()
+        .filter(|l| crate::tui::search::matches(&line_text(l), &app.search_query))
+        .count()
+}
+
+/// Build the full, unfiltered set of lines for the current tab.
+fn unfiltered_lines(app: &App) -> Vec<Line<'static>> {
     // The Tests tab renders independently of the response: a transport or
     // pre-request-script failure has no response yet still produces a script
     // error and/or pre-request assertions we must surface.
@@ -106,26 +122,16 @@ fn tab_content(app: &App) -> Vec<Line<'static>> {
     match app.response_tab {
         ResponseTab::Body => {
             let ct = header_value(&resp.headers, "content-type");
-            let raw: Vec<String> = pretty_body(&resp.body, ct)
+            pretty_body(&resp.body, ct)
                 .lines()
-                .map(|l| l.to_string())
-                .collect();
-            crate::tui::search::filter_lines(&raw, &app.search_query)
-                .into_iter()
-                .map(|(_, l)| Line::raw(l))
+                .map(|l| Line::raw(l.to_string()))
                 .collect()
         }
-        ResponseTab::Headers => {
-            let raw: Vec<String> = resp
-                .headers
-                .iter()
-                .map(|(k, v)| format!("{k}: {v}"))
-                .collect();
-            crate::tui::search::filter_lines(&raw, &app.search_query)
-                .into_iter()
-                .map(|(_, l)| Line::raw(l))
-                .collect()
-        }
+        ResponseTab::Headers => resp
+            .headers
+            .iter()
+            .map(|(k, v)| Line::raw(format!("{k}: {v}")))
+            .collect(),
         ResponseTab::Cookies => {
             let cs = cookies(&resp.headers);
             if cs.is_empty() {
@@ -140,6 +146,17 @@ fn tab_content(app: &App) -> Vec<Line<'static>> {
         // Tests is handled before the no-response guard above.
         ResponseTab::Tests => tests_tab(app),
     }
+}
+
+fn tab_content(app: &App) -> Vec<Line<'static>> {
+    let lines = unfiltered_lines(app);
+    if app.search_query.is_empty() {
+        return lines;
+    }
+    lines
+        .into_iter()
+        .filter(|l| crate::tui::search::matches(&line_text(l), &app.search_query))
+        .collect()
 }
 
 /// Render the Tests tab: a script error (red) above the assertion pass/fail list.
@@ -488,6 +505,90 @@ mod tests {
         assert!(
             !text.contains("(no response)"),
             "Tests tab must not short-circuit to (no response), got: {text}"
+        );
+    }
+
+    #[test]
+    fn cookies_tab_is_filtered_by_search_query() {
+        // Two Set-Cookie headers; searching for one cookie name hides the other.
+        let mut resp = json_response();
+        resp.headers
+            .push(("set-cookie".into(), "session=abc; Path=/".into()));
+        resp.headers
+            .push(("set-cookie".into(), "theme=dark; Path=/".into()));
+        let mut app = make_app_with_response(J, resp);
+        app.response_tab = ResponseTab::Cookies;
+        app.search_query = "session".to_string();
+        let lines = tab_content(&app);
+        let text: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(
+            text.contains("session"),
+            "kept matching cookie, got: {text}"
+        );
+        assert!(
+            !text.contains("theme"),
+            "non-matching cookie should be filtered out, got: {text}"
+        );
+    }
+
+    #[test]
+    fn tests_tab_is_filtered_by_search_query() {
+        use golden_core::result::Assertion;
+        let mut app = make_app(J);
+        app.last_assertions = vec![
+            Assertion {
+                name: "status 200".into(),
+                passed: true,
+                error: None,
+            },
+            Assertion {
+                name: "has id".into(),
+                passed: false,
+                error: Some("expected id".into()),
+            },
+        ];
+        app.response_tab = ResponseTab::Tests;
+        app.search_query = "status".to_string();
+        let lines = tab_content(&app);
+        let text: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        assert!(
+            text.contains("status 200"),
+            "kept matching assertion, got: {text}"
+        );
+        assert!(
+            !text.contains("has id"),
+            "non-matching assertion should be filtered out, got: {text}"
+        );
+    }
+
+    #[test]
+    fn match_count_counts_matching_lines_for_current_tab() {
+        // Headers tab: content-type + x-request-id. Searching "x-request" matches one.
+        let mut app = make_app_with_response(J, json_response());
+        app.response_tab = ResponseTab::Headers;
+        app.search_query = "x-request".to_string();
+        assert_eq!(match_count(&app), 1);
+        // Empty query counts every line (here: 2 headers).
+        app.search_query = String::new();
+        assert_eq!(match_count(&app), 2);
+    }
+
+    #[test]
+    fn search_bar_shows_match_count() {
+        // The search overlay should surface the live count, e.g. "(1 match)".
+        let mut app = make_app_with_response(J, json_response());
+        app.response_tab = ResponseTab::Headers;
+        app.search_query = "x-request".to_string();
+        app.mode = crate::tui::app::Mode::Search;
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| crate::tui::ui::overlay::draw_search(f, &app, f.area()))
+            .unwrap();
+        let content = buf_content(&terminal);
+        assert!(
+            content.contains("1 match"),
+            "search bar should show match count, got: {content}"
         );
     }
 

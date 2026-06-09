@@ -16,8 +16,8 @@ pub fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Pane::Tree => {
             " ↑↓ move · Enter send · e edit · a add · r run · F2 rename · R run-all · Tab panes · ? help · ^C quit "
         }
-        Pane::Request => " f field · e edit · Enter send · Tab panes · ? help · ^C quit ",
-        Pane::Response => " ↑↓ scroll · t tab · Tab panes · ? help · ^C quit ",
+        Pane::Request => " f field · e edit · Enter send · C curl · Tab panes · ? help · ^C quit ",
+        Pane::Response => " ↑↓ scroll · t tab · C curl · o browser · Tab panes · ? help · ^C quit ",
     };
     // First-open welcome banner (highlighted) takes the line until the first key.
     // Then: Confirm message > transient status > context hints.

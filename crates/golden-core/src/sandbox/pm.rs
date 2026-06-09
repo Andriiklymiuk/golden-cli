@@ -121,6 +121,45 @@ fn js_error_string(ctx: &Ctx<'_>, e: rquickjs::Error) -> String {
     e.to_string()
 }
 
+/// Normalize a `pm.sendRequest` header spec into `(name, value)` pairs.
+///
+/// Newman/the extension forward the request's full header set, so accept either
+/// shape the SDK emits:
+///   * an object map `{ "X-Token": "secret" }`, or
+///   * an array of header objects `[{ key, value, disabled? }]`.
+///
+/// Disabled entries are dropped (matching how the executor skips disabled headers).
+fn headers_from_value(v: Value<'_>) -> Vec<(String, String)> {
+    if let Some(arr) = v.as_array() {
+        let mut out = Vec::with_capacity(arr.len());
+        for item in arr.iter::<Value>().flatten() {
+            let Some(o) = item.into_object() else {
+                continue;
+            };
+            if o.get::<_, bool>("disabled").unwrap_or(false) {
+                continue;
+            }
+            let key: String = o.get("key").unwrap_or_default();
+            if key.is_empty() {
+                continue;
+            }
+            let value: String = o.get("value").unwrap_or_default();
+            out.push((key, value));
+        }
+        out
+    } else if let Some(o) = v.into_object() {
+        o.keys::<String>()
+            .flatten()
+            .map(|k| {
+                let value: String = o.get(k.as_str()).unwrap_or_default();
+                (k, value)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
 /// console.log/info/warn/error -> push formatted line into the collector.
 ///
 /// Strategy: register a native Rust function `__golden_log` that takes a single
@@ -315,6 +354,7 @@ fn install_pm(
     // Returns a JSON string that the JS wrapper parses; avoids Object<'js> lifetime trouble.
     {
         let cfg = cfg.clone();
+        let vars = vars.clone();
         let send_fn = Function::new(ctx.clone(), move |spec: Value<'_>| -> String {
             use crate::model::{Header, Request, Url};
             // Accept a string URL or an object {url, method, body}.
@@ -329,7 +369,21 @@ fn install_pm(
                 let url: String = o.get("url").unwrap_or_default();
                 let method: String = o.get("method").unwrap_or_else(|_| "GET".to_string());
                 let body: Option<String> = o.get::<_, String>("body").ok();
-                (method, url, Vec::<(String, String)>::new(), body)
+                // Newman/extension forward the full header set; accept `header` or
+                // `headers`, each either an object `{ name: value }` or an array of
+                // `{ key, value, disabled? }` (Postman's request-header shape).
+                let headers = o
+                    .get::<_, Value>("header")
+                    .ok()
+                    .filter(|v| !v.is_null() && !v.is_undefined())
+                    .or_else(|| {
+                        o.get::<_, Value>("headers")
+                            .ok()
+                            .filter(|v| !v.is_null() && !v.is_undefined())
+                    })
+                    .map(headers_from_value)
+                    .unwrap_or_default();
+                (method, url, headers, body)
             } else {
                 ("GET".to_string(), String::new(), Vec::new(), None)
             };
@@ -352,15 +406,24 @@ fn install_pm(
                     formdata: vec![],
                 }),
             };
-            match crate::http::send(&req, &std::collections::HashMap::new(), &cfg) {
+            match crate::http::send(&req, &vars, &cfg) {
                 Ok(resp) => {
                     let text = String::from_utf8_lossy(&resp.body).to_string();
                     // Escape the text safely for inclusion in JSON
                     let text_escaped =
                         serde_json::to_string(&text).unwrap_or_else(|_| "\"\"".to_string());
+                    // Postman's `res.status` is the HTTP reason phrase (e.g. "OK",
+                    // "Created"); `res.code` is the numeric code. Emit the canonical
+                    // reason string so callbacks that check `res.status === 'OK'` work.
+                    let status_text = reqwest::StatusCode::from_u16(resp.status)
+                        .ok()
+                        .and_then(|s| s.canonical_reason())
+                        .unwrap_or("");
+                    let status_escaped =
+                        serde_json::to_string(status_text).unwrap_or_else(|_| "\"\"".to_string());
                     format!(
                         r#"{{"code":{},"status":{},"responseTime":{},"text":{},"__error":null}}"#,
-                        resp.status, resp.status, resp.time_ms, text_escaped,
+                        resp.status, status_escaped, resp.time_ms, text_escaped,
                     )
                 }
                 Err(e) => {
@@ -805,6 +868,170 @@ mod tests {
             r#"pm.sendRequest("{url}", function (err, res) {{
                  pm.test("sub ok", function () {{ pm.expect(res.code).to.equal(200); }});
                  pm.test("sub json", function () {{ pm.expect(res.json().v).to.equal(5); }});
+               }});"#,
+            url = url
+        );
+        let out = run(&script, None);
+        assert!(out.error.is_none(), "{:?}", out.error);
+        assert_eq!(out.assertions.len(), 2);
+        assert!(
+            out.assertions.iter().all(|a| a.passed),
+            "{:?}",
+            out.assertions
+        );
+    }
+
+    #[test]
+    fn pm_send_request_forwards_object_headers() {
+        use httpmock::prelude::*;
+        let server = MockServer::start();
+        // The mock only matches when the chained request carries the header.
+        server.mock(|when, then| {
+            when.method(POST).path("/chain").header("x-token", "secret");
+            then.status(200).body(r#"{"ok":true}"#);
+        });
+        let url = format!("{}/chain", server.base_url());
+        let script = format!(
+            r#"pm.sendRequest(
+                 {{ url: "{url}", method: "POST", header: {{ "X-Token": "secret" }} }},
+                 function (err, res) {{
+                   pm.test("no err", function () {{ pm.expect(err).to.be.null; }});
+                   pm.test("header reached server", function () {{ pm.expect(res.code).to.equal(200); }});
+                 }});"#,
+            url = url
+        );
+        let out = run(&script, None);
+        assert!(out.error.is_none(), "{:?}", out.error);
+        assert_eq!(out.assertions.len(), 2);
+        assert!(
+            out.assertions.iter().all(|a| a.passed),
+            "{:?}",
+            out.assertions
+        );
+    }
+
+    #[test]
+    fn pm_send_request_forwards_array_headers() {
+        use httpmock::prelude::*;
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/arr").header("x-token", "secret");
+            then.status(200).body(r#"{"ok":true}"#);
+        });
+        let url = format!("{}/arr", server.base_url());
+        let script = format!(
+            r#"pm.sendRequest(
+                 {{ url: "{url}", method: "GET",
+                    header: [{{ key: "X-Token", value: "secret" }}] }},
+                 function (err, res) {{
+                   pm.test("header reached server", function () {{ pm.expect(res.code).to.equal(200); }});
+                 }});"#,
+            url = url
+        );
+        let out = run(&script, None);
+        assert!(out.error.is_none(), "{:?}", out.error);
+        assert_eq!(out.assertions.len(), 1);
+        assert!(
+            out.assertions.iter().all(|a| a.passed),
+            "{:?}",
+            out.assertions
+        );
+    }
+
+    #[test]
+    fn pm_send_request_array_headers_drop_disabled_and_empty_key() {
+        use httpmock::prelude::*;
+        let server = MockServer::start();
+        // The mock matches only when the ENABLED header reached the server and the
+        // disabled / empty-key entries were dropped before dispatch. The matcher
+        // inspects the raw received headers (names arrive lowercased).
+        server.mock(|when, then| {
+            when.method(GET).path("/filtered").matches(|req| {
+                let headers = req.headers.clone().unwrap_or_default();
+                let has = |name: &str, val: &str| {
+                    headers
+                        .iter()
+                        .any(|(k, v)| k.eq_ignore_ascii_case(name) && v == val)
+                };
+                let present =
+                    |name: &str| headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(name));
+                has("x-token", "secret") && !present("x-disabled") && !has("", "orphan")
+            });
+            then.status(200).body(r#"{"ok":true}"#);
+        });
+        let url = format!("{}/filtered", server.base_url());
+        let script = format!(
+            r#"pm.sendRequest(
+                 {{ url: "{url}", method: "GET",
+                    header: [
+                      {{ key: "X-Token", value: "secret" }},
+                      {{ key: "X-Disabled", value: "nope", disabled: true }},
+                      {{ key: "", value: "orphan" }}
+                    ] }},
+                 function (err, res) {{
+                   pm.test("no err", function () {{ pm.expect(err).to.be.null; }});
+                   pm.test("only enabled header reached server", function () {{ pm.expect(res.code).to.equal(200); }});
+                 }});"#,
+            url = url
+        );
+        let out = run(&script, None);
+        assert!(out.error.is_none(), "{:?}", out.error);
+        assert_eq!(out.assertions.len(), 2);
+        assert!(
+            out.assertions.iter().all(|a| a.passed),
+            "{:?}",
+            out.assertions
+        );
+    }
+
+    #[test]
+    fn pm_send_request_substitutes_variables_in_url_and_headers() {
+        use httpmock::prelude::*;
+        let server = MockServer::start();
+        // The mock only matches when {{path}} and {{token}} are resolved against
+        // the active variable set before the sub-request is dispatched.
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/token")
+                .header("authorization", "Bearer abc123");
+            then.status(200).body(r#"{"ok":true}"#);
+        });
+        let mut vars = HashMap::new();
+        vars.insert("baseUrl".to_string(), server.base_url());
+        vars.insert("path".to_string(), "token".to_string());
+        vars.insert("token".to_string(), "abc123".to_string());
+        let script = r#"pm.sendRequest(
+                 { url: "{{baseUrl}}/{{path}}", method: "GET",
+                   header: { "Authorization": "Bearer {{token}}" } },
+                 function (err, res) {
+                   pm.test("no err", function () { pm.expect(err).to.be.null; });
+                   pm.test("vars resolved", function () { pm.expect(res.code).to.equal(200); });
+                 });"#;
+        let out =
+            RquickJsEngine::new().run_script(script, &vars, &req(), None, &HttpConfig::default());
+        assert!(out.error.is_none(), "{:?}", out.error);
+        assert_eq!(out.assertions.len(), 2);
+        assert!(
+            out.assertions.iter().all(|a| a.passed),
+            "{:?}",
+            out.assertions
+        );
+    }
+
+    #[test]
+    fn pm_send_request_status_is_reason_phrase() {
+        use httpmock::prelude::*;
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/created");
+            then.status(201).body(r#"{"ok":true}"#);
+        });
+        let url = format!("{}/created", server.base_url());
+        // Postman contract: res.status is the reason phrase, res.code the number.
+        let script = format!(
+            r#"pm.sendRequest("{url}", function (err, res) {{
+                 pm.test("status text", function () {{ pm.expect(res.status).to.equal('Created'); }});
+                 pm.test("code number", function () {{ pm.expect(res.code).to.equal(201); }});
                }});"#,
             url = url
         );

@@ -66,6 +66,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         overlay::draw_env_switch(frame, app, frame.area());
     }
 
+    // Request-history overlay.
+    if app.mode == crate::tui::app::Mode::History {
+        overlay::draw_history(frame, app, frame.area());
+    }
+
     // Search bar overlay.
     if app.mode == crate::tui::app::Mode::Search {
         overlay::draw_search(frame, app, frame.area());
@@ -89,6 +94,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Move-to-collection picker overlay.
     if app.mode == crate::tui::app::Mode::MoveTarget {
         overlay::draw_move_target(frame, app, frame.area());
+    }
+
+    // Move-to-folder picker overlay (destination folder within the target collection).
+    if app.mode == crate::tui::app::Mode::MoveFolder {
+        overlay::draw_move_folder(frame, app, frame.area());
+    }
+
+    // Collection variable manager overlay.
+    if app.mode == crate::tui::app::Mode::Variables {
+        overlay::draw_variables(frame, app, frame.area());
+    }
+
+    // Curl overlay (read-only generated curl command).
+    if app.mode == crate::tui::app::Mode::Curl {
+        overlay::draw_curl(frame, app, frame.area());
     }
 }
 

@@ -152,6 +152,17 @@ pub fn execute(args: &SendArgs, collections_override: &[String]) -> i32 {
     match core_send(request, scopes.as_map(), &cfg) {
         Ok(resp) => {
             let url = substitute(request.url.raw(), scopes.as_map());
+            // Record into request history (no-op when recording is disabled).
+            // Unmasked so entries stay replayable (replay resends stored headers).
+            // Use the cwd workspace so `golden history list/replay` (which key off
+            // current_dir) read back exactly what `send` recorded.
+            let entry = golden_core::history::HistoryEntry::from_sent(
+                request,
+                scopes.as_map(),
+                Some(resp.status),
+                resp.time_ms,
+            );
+            let _ = golden_core::history::append(&workspace, entry, false);
             let _ = writeln!(
                 out,
                 "{} {} -> {} ({}ms)",
