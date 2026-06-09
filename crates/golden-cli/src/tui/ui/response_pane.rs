@@ -91,6 +91,12 @@ pub fn draw_response(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn tab_content(app: &App) -> Vec<Line<'static>> {
+    // The Tests tab renders independently of the response: a transport or
+    // pre-request-script failure has no response yet still produces a script
+    // error and/or pre-request assertions we must surface.
+    if app.response_tab == ResponseTab::Tests {
+        return tests_tab(app);
+    }
     let Some(resp) = &app.last_response else {
         return vec![Line::styled(
             "(no response)",
@@ -131,15 +137,58 @@ fn tab_content(app: &App) -> Vec<Line<'static>> {
                 cs.into_iter().map(Line::raw).collect()
             }
         }
-        ResponseTab::Tests => {
-            // Assertions arrive once the sandbox plan populates RequestResult; for a
-            // single send there is no script run, so show the parked state.
-            vec![Line::styled(
-                "Test results appear after `r`/`R` runs (sandbox plan).",
-                Style::default().fg(Color::DarkGray),
-            )]
+        // Tests is handled before the no-response guard above.
+        ResponseTab::Tests => tests_tab(app),
+    }
+}
+
+/// Render the Tests tab: a script error (red) above the assertion pass/fail list.
+/// Rendered even when there is no response (transport / pre-script failure).
+fn tests_tab(app: &App) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if let Some(err) = &app.last_script_error {
+        lines.push(Line::styled(
+            format!("script error: {err}"),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    if app.last_assertions.is_empty() {
+        lines.push(Line::styled(
+            "(no tests defined for this request)",
+            Style::default().fg(Color::DarkGray),
+        ));
+        return lines;
+    }
+    let passed = app.last_assertions.iter().filter(|a| a.passed).count();
+    let failed = app.last_assertions.len() - passed;
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{passed} passed"),
+            Style::default().fg(Color::Green),
+        ),
+        Span::raw(", "),
+        Span::styled(format!("{failed} failed"), Style::default().fg(Color::Red)),
+    ]));
+    for a in &app.last_assertions {
+        if a.passed {
+            lines.push(Line::styled(
+                format!("\u{2713} {}", a.name),
+                Style::default().fg(Color::Green),
+            ));
+        } else {
+            lines.push(Line::styled(
+                format!("\u{2717} {}", a.name),
+                Style::default().fg(Color::Red),
+            ));
+            if let Some(e) = &a.error {
+                lines.push(Line::styled(
+                    format!("    {e}"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
         }
     }
+    lines
 }
 
 #[cfg(test)]
@@ -366,6 +415,80 @@ mod tests {
             .iter()
             .any(|c| c.fg == ratatui::style::Color::Cyan);
         assert!(has_cyan, "focused response pane should have cyan border");
+    }
+
+    #[test]
+    fn tests_tab_renders_pass_fail_and_summary() {
+        use golden_core::result::Assertion;
+        let mut app = make_app(J);
+        app.last_assertions = vec![
+            Assertion {
+                name: "status 200".into(),
+                passed: true,
+                error: None,
+            },
+            Assertion {
+                name: "has id".into(),
+                passed: false,
+                error: Some("expected id".into()),
+            },
+        ];
+        app.response_tab = ResponseTab::Tests;
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw_response(f, &app, f.area())).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(text.contains("status 200"));
+        assert!(text.contains("has id"));
+        assert!(text.contains("1 passed") && text.contains("1 failed"));
+    }
+
+    #[test]
+    fn tests_tab_renders_empty_state_when_no_tests_defined() {
+        // No assertions and no script error → the Tests tab shows the empty-state
+        // hint, not a pass/fail summary.
+        let mut app = make_app(J);
+        app.last_assertions = vec![];
+        app.last_script_error = None;
+        app.response_tab = ResponseTab::Tests;
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw_response(f, &app, f.area())).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            text.contains("no tests defined for this request"),
+            "Tests tab should show the empty-state hint, got: {text}"
+        );
+        assert!(
+            !text.contains("passed"),
+            "empty Tests tab must not render a pass/fail summary, got: {text}"
+        );
+    }
+
+    #[test]
+    fn tests_tab_renders_script_error_with_no_response() {
+        // A transport / pre-request-script failure leaves last_response = None but
+        // sets last_script_error. The Tests tab must still render the error (it must
+        // not short-circuit to "(no response)").
+        let mut app = make_app(J);
+        app.last_response = None;
+        app.last_script_error = Some("ReferenceError: foo is not defined".into());
+        app.response_tab = ResponseTab::Tests;
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw_response(f, &app, f.area())).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            text.contains("script error"),
+            "Tests tab should render the script error even with no response, got: {text}"
+        );
+        assert!(
+            !text.contains("(no response)"),
+            "Tests tab must not short-circuit to (no response), got: {text}"
+        );
     }
 
     #[test]

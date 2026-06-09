@@ -1,7 +1,6 @@
 //! Background workers: run HTTP sends / collection runs off the UI thread and
 //! stream results back over channels. A shared AtomicBool is the cancel token.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
@@ -9,15 +8,26 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use golden_core::env::VarScopes;
-use golden_core::http::{send, HttpConfig, HttpResponse};
-use golden_core::model::{Collection, Item, Request};
+use golden_core::http::HttpConfig;
+use golden_core::model::{Collection, Item};
 use golden_core::result::RunResult;
-use golden_core::runner::run as core_run;
+use golden_core::runner::{run_single, run_with_cancel, SingleOutcome};
+
+/// Default per-request timeout in the TUI so a hung server cannot wedge `sending…`.
+pub const TUI_TIMEOUT_MS: u64 = 30_000;
+
+/// The HttpConfig the TUI uses for sends and runs (timeout-bounded).
+pub fn tui_http_config() -> HttpConfig {
+    HttpConfig {
+        insecure: false,
+        timeout_ms: Some(TUI_TIMEOUT_MS),
+    }
+}
 
 /// Messages the send worker streams back to the UI loop.
 #[derive(Debug)]
 pub enum SendMsg {
-    Done(Result<HttpResponse, String>),
+    Done(Box<SingleOutcome>),
     Cancelled,
 }
 
@@ -28,18 +38,25 @@ pub struct SendHandle {
     pub join: Option<JoinHandle<()>>,
 }
 
-/// Spawn a thread that sends `req` with `vars` + `cfg`, then posts the result.
-/// If `cancel` is set before the result is delivered, posts `Cancelled` instead.
-pub fn spawn_send(req: Request, vars: HashMap<String, String>, cfg: HttpConfig) -> SendHandle {
+/// Spawn a thread that runs the leaf request at `target_path` within `coll`
+/// through the script pipeline (so its pre/test scripts run), then posts the
+/// outcome. If `cancel` is set before the result is delivered, posts
+/// `Cancelled` instead.
+pub fn spawn_send(
+    coll: Collection,
+    target_path: Vec<usize>,
+    scopes: VarScopes,
+    cfg: HttpConfig,
+) -> SendHandle {
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_thread = cancel.clone();
     let (tx, rx): (Sender<SendMsg>, Receiver<SendMsg>) = std::sync::mpsc::channel();
     let join = std::thread::spawn(move || {
-        let result = send(&req, &vars, &cfg);
+        let outcome = run_single(&coll, &target_path, &scopes, &cfg);
         if cancel_thread.load(Ordering::SeqCst) {
             let _ = tx.send(SendMsg::Cancelled);
         } else {
-            let _ = tx.send(SendMsg::Done(result));
+            let _ = tx.send(SendMsg::Done(Box::new(outcome)));
         }
     });
     SendHandle {
@@ -66,11 +83,18 @@ pub enum RunMsg {
     Done(RunResult),
 }
 
-/// A live collection run: receiver + join handle.
-/// (Cancellation is not supported for a single blocking call; parks naturally.)
+/// A live collection run: receiver + cooperative cancel flag + join handle.
 pub struct RunHandle {
     pub rx: Receiver<RunMsg>,
+    pub cancel: Arc<AtomicBool>,
     pub join: Option<JoinHandle<()>>,
+}
+
+impl RunHandle {
+    /// Signal cancellation; the run stops between requests.
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::SeqCst);
+    }
 }
 
 /// Count leaf request items in a collection (for the progress total).
@@ -105,11 +129,13 @@ pub fn spawn_run(
     iterations: u32,
     cfg: HttpConfig,
 ) -> RunHandle {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_thread = cancel.clone();
     let (tx, rx): (Sender<RunMsg>, Receiver<RunMsg>) = std::sync::mpsc::channel();
     let join = std::thread::spawn(move || {
         let mut merged = RunResult::default();
         for coll in &colls {
-            let r = core_run(coll, &scopes, iterations, &cfg);
+            let r = run_with_cancel(coll, &scopes, iterations, &cfg, Some(cancel_thread.clone()));
             merged.collections.extend(r.collections);
             merged.totals.requests += r.totals.requests;
             merged.totals.failed_requests += r.totals.failed_requests;
@@ -121,6 +147,7 @@ pub fn spawn_run(
     });
     RunHandle {
         rx,
+        cancel,
         join: Some(join),
     }
 }
@@ -260,16 +287,24 @@ mod watch_tests {
 mod tests {
     use super::*;
     use golden_core::env::VarScopes;
-    use golden_core::model::{Collection, Url};
+    use golden_core::model::Collection;
     use httpmock::prelude::*;
 
-    fn req(url: &str) -> Request {
-        Request {
-            method: "GET".into(),
-            url: Url::Raw(url.into()),
-            header: vec![],
-            body: None,
-        }
+    fn one_item_coll(url: &str) -> Collection {
+        let json = format!(
+            r#"{{"info":{{"name":"C"}},"item":[{{"name":"a","request":{{"method":"GET","url":"{url}"}}}}]}}"#
+        );
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn tui_http_config_is_timeout_bounded() {
+        // The central fix for the "sending… forever" bug: the TUI must send with a
+        // bounded timeout (not HttpConfig::default()'s timeout_ms = None).
+        assert_eq!(TUI_TIMEOUT_MS, 30_000);
+        assert_eq!(tui_http_config().timeout_ms, Some(TUI_TIMEOUT_MS));
+        // Guard against an accidental None/0 (the regression that reintroduces the bug).
+        assert!(tui_http_config().timeout_ms.is_some_and(|ms| ms > 0));
     }
 
     #[test]
@@ -280,14 +315,14 @@ mod tests {
             then.status(200).body("hi");
         });
         let handle = spawn_send(
-            req(&format!("{}/ok", server.base_url())),
-            HashMap::new(),
+            one_item_coll(&format!("{}/ok", server.base_url())),
+            vec![0],
+            VarScopes::default(),
             HttpConfig::default(),
         );
-        let msg = handle.rx.recv().unwrap();
-        match msg {
-            SendMsg::Done(Ok(resp)) => assert_eq!(resp.status, 200),
-            other => panic!("expected Done(Ok), got {other:?}"),
+        match handle.rx.recv().unwrap() {
+            SendMsg::Done(out) => assert_eq!(out.response.unwrap().status, 200),
+            other => panic!("expected Done, got {other:?}"),
         }
     }
 
@@ -301,8 +336,9 @@ mod tests {
                 .body("late");
         });
         let handle = spawn_send(
-            req(&format!("{}/slow", server.base_url())),
-            HashMap::new(),
+            one_item_coll(&format!("{}/slow", server.base_url())),
+            vec![0],
+            VarScopes::default(),
             HttpConfig::default(),
         );
         handle.cancel();

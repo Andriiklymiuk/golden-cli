@@ -12,19 +12,28 @@ pub fn drain_send(app: &mut App, handle: &mut Option<SendHandle>) -> bool {
     match h.rx.try_recv() {
         Ok(msg) => {
             match msg {
-                SendMsg::Done(Ok(resp)) => {
-                    app.last_response = Some(resp);
-                    app.last_error = None;
-                    app.response_scroll = 0;
-                    app.response_tab = ResponseTab::Body;
-                    // Reveal the response (matters on narrow layouts that show one
-                    // detail pane at a time).
-                    app.focus = Pane::Response;
-                }
-                SendMsg::Done(Err(e)) => {
-                    app.last_error = Some(e);
-                    app.last_response = None;
-                    app.focus = Pane::Response;
+                SendMsg::Done(out) => {
+                    let out = *out;
+                    app.last_assertions = out.result.assertions.clone();
+                    if let Some(resp) = out.response {
+                        app.last_response = Some(resp);
+                        app.last_error = None;
+                        app.last_script_error = out.result.error.clone();
+                        app.response_scroll = 0;
+                        app.response_tab = ResponseTab::Body;
+                        // Reveal the response (matters on narrow layouts that show one
+                        // detail pane at a time).
+                        app.focus = Pane::Response;
+                    } else {
+                        app.last_error = out.result.error.clone();
+                        app.last_response = None;
+                        // A transport / pre-request-script failure has no response, but
+                        // the Tests tab still shows the script error (and any pre-request
+                        // assertions, kept above), so surface it here.
+                        app.last_script_error = out.result.error.clone();
+                        app.focus = Pane::Response;
+                    }
+                    app.status.clear();
                 }
                 SendMsg::Cancelled => {
                     app.status = "send cancelled".into();
@@ -51,18 +60,93 @@ pub fn drain_run(app: &mut App, handle: &mut Option<RunHandle>) {
 
 /// Fire the currently-selected request (shared by `s`, `Enter`, and chord-Enter).
 fn send_current(app: &mut App, send_handle: &mut Option<SendHandle>) {
-    if let Some(req) = app.current_request().cloned() {
+    // A send is already in flight: don't spawn a second worker (which would drop
+    // the first handle without cancelling it, orphaning a thread until timeout).
+    if app.sending {
+        return;
+    }
+    if let Some((coll, target_path)) = app.selected_send_target() {
         app.sending = true;
+        // Just the verb — the status bar owns the " · Esc cancel " suffix while
+        // `app.sending` is true (avoids a doubled hint).
         app.status = "sending\u{2026}".into();
-        let vars = app.vars_map();
+        app.last_assertions.clear();
+        app.last_script_error = None;
         *send_handle = Some(spawn_send(
-            req,
-            vars,
-            golden_core::http::HttpConfig::default(),
+            coll,
+            target_path,
+            app.scopes.clone(),
+            crate::tui::worker::tui_http_config(),
         ));
     } else {
         app.status = "select a request first".into();
     }
+}
+
+/// Run the node under the cursor: a request runs (with its tests), a folder runs
+/// its subtree, a collection runs the whole collection — all via the run overlay.
+fn run_selected(
+    app: &mut App,
+    send_handle: &mut Option<SendHandle>,
+    run_handle: &mut Option<RunHandle>,
+) {
+    use crate::tui::tree::NodeKind;
+    let Some(row) = app.current_row() else {
+        app.status = "nothing selected".into();
+        return;
+    };
+    match row.kind {
+        NodeKind::Request => send_current(app, send_handle),
+        NodeKind::Collection => {
+            let ci = row.path[0];
+            if let Some(lc) = app.collections.get(ci) {
+                let coll = lc.collection.clone();
+                start_run(app, run_handle, vec![coll]);
+            }
+        }
+        NodeKind::Folder => {
+            let path = row.path.clone();
+            let ci = path[0];
+            if let (Some(lc), Some(folder)) = (app.collections.get(ci), app.item_at(&path).cloned())
+            {
+                let parent = &lc.collection;
+                let synthetic = golden_core::model::Collection {
+                    info: parent.info.clone(),
+                    variable: parent.variable.clone(),
+                    item: vec![folder],
+                    extra: parent.extra.clone(),
+                };
+                start_run(app, run_handle, vec![synthetic]);
+            }
+        }
+    }
+}
+
+/// Open the run overlay and spawn a (cancellable) run over `colls`.
+fn start_run(
+    app: &mut App,
+    run_handle: &mut Option<RunHandle>,
+    colls: Vec<golden_core::model::Collection>,
+) {
+    // A run is already in flight: don't launch a second (which would drop the
+    // first handle without cancelling it, orphaning its worker thread).
+    if app.run.running || run_handle.is_some() {
+        return;
+    }
+    let total: usize = colls.iter().map(crate::tui::worker::count_requests).sum();
+    app.run = crate::tui::run_state::RunState {
+        running: true,
+        total,
+        done: 0,
+        result: None,
+    };
+    app.mode = Mode::Run;
+    *run_handle = Some(crate::tui::worker::spawn_run(
+        colls,
+        app.scopes.clone(),
+        1,
+        crate::tui::worker::tui_http_config(),
+    ));
 }
 
 /// Apply one key event to the app.
@@ -99,6 +183,19 @@ pub fn handle_key(
         if app.mode == Mode::Confirm {
             app.confirm = None;
             app.status = "cancelled".into();
+        }
+        if app.mode == Mode::Run {
+            // Cancel an *in-flight* run (checked between requests) and report it.
+            // A finished run still shows its results in Mode::Run; dismissing that
+            // overlay must just close — "run cancelled" there would be misleading.
+            let was_running = app.run.running;
+            if let Some(h) = run_handle.take() {
+                h.cancel();
+            }
+            app.run.running = false;
+            if was_running {
+                app.status = "run cancelled".into();
+            }
         }
         app.mode = Mode::Normal;
         return;
@@ -222,6 +319,18 @@ pub fn handle_key(
         return;
     }
 
+    // While a send is in flight, Esc or `c` aborts it from ANY pane. Reset the UI
+    // immediately and detach the worker thread (its timeout-bounded send finishes
+    // into a dropped channel). This must run before the tree's `c`=duplicate.
+    if app.sending && matches!(key.code, KeyCode::Esc | KeyCode::Char('c')) {
+        if let Some(h) = send_handle.take() {
+            h.cancel();
+        }
+        app.sending = false;
+        app.status = "send cancelled".into();
+        return;
+    }
+
     // Ctrl+D = duplicate the selected item (works from any pane). Intercept before
     // the match so it doesn't fall through to `d` (= delete in the tree pane).
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('d') {
@@ -268,18 +377,13 @@ pub fn handle_key(
             }
         }
         KeyCode::Char('s') => send_current(app, send_handle),
+        // `c` = duplicate (copy) the selected item. (Cancelling an in-flight send is
+        // handled by the earlier intercept while `app.sending` is true.)
         KeyCode::Char('c') => {
-            if app.focus == Pane::Tree {
-                // `c` in the tree pane = duplicate (copy) the selected item.
-                if app.current_row().is_some() {
-                    app.start_duplicate();
-                } else {
-                    app.status = "nothing selected".into();
-                }
-            } else if let Some(handle) = send_handle {
-                // Outside the tree pane, `c` cancels an in-flight send.
-                handle.cancel();
-                app.status = "cancelling\u{2026}".into();
+            if app.current_row().is_some() {
+                app.start_duplicate();
+            } else {
+                app.status = "nothing selected".into();
             }
         }
         KeyCode::Char('t') => app.next_response_tab(),
@@ -326,30 +430,13 @@ pub fn handle_key(
         KeyCode::Char('m') if app.focus == Pane::Tree => {
             app.open_move_prompt();
         }
-        // `r` in the tree pane = rename; outside the tree pane = run selected collection.
-        KeyCode::Char('r') => {
-            if app.focus == Pane::Tree {
-                if !app.open_rename_prompt() {
-                    app.status = "nothing selected".into();
-                }
-            } else if let Some(row) = app.current_row() {
-                let ci = row.path[0];
-                if let Some(lc) = app.collections.get(ci) {
-                    let coll = lc.collection.clone();
-                    app.run = crate::tui::run_state::RunState {
-                        running: true,
-                        total: crate::tui::worker::count_requests(&coll),
-                        done: 0,
-                        result: None,
-                    };
-                    app.mode = Mode::Run;
-                    *run_handle = Some(crate::tui::worker::spawn_run(
-                        vec![coll],
-                        app.scopes.clone(),
-                        1,
-                        golden_core::http::HttpConfig::default(),
-                    ));
-                }
+        // `r` runs the selected node: a request runs (with tests), a folder runs its
+        // subtree, a collection runs the whole collection.
+        KeyCode::Char('r') => run_selected(app, send_handle, run_handle),
+        // F2 = rename the selected tree row (works from any pane).
+        KeyCode::F(2) => {
+            if !app.open_rename_prompt() {
+                app.status = "nothing selected".into();
             }
         }
         KeyCode::Char('R') => {
@@ -358,20 +445,7 @@ pub fn handle_key(
                 .iter()
                 .map(|c| c.collection.clone())
                 .collect();
-            let total: usize = colls.iter().map(crate::tui::worker::count_requests).sum();
-            app.run = crate::tui::run_state::RunState {
-                running: true,
-                total,
-                done: 0,
-                result: None,
-            };
-            app.mode = Mode::Run;
-            *run_handle = Some(crate::tui::worker::spawn_run(
-                colls,
-                app.scopes.clone(),
-                1,
-                golden_core::http::HttpConfig::default(),
-            ));
+            start_run(app, run_handle, colls);
         }
         _ => {}
     }
@@ -787,20 +861,48 @@ mod tests {
         assert_eq!(app.response_tab, ResponseTab::Body);
     }
 
+    fn outcome_ok(status: u16) -> golden_core::runner::SingleOutcome {
+        golden_core::runner::SingleOutcome {
+            response: Some(golden_core::http::HttpResponse {
+                status,
+                headers: vec![],
+                body: b"ok".to_vec(),
+                time_ms: 5,
+            }),
+            result: golden_core::result::RequestResult {
+                name: "a".into(),
+                method: "GET".into(),
+                url: "http://x".into(),
+                status: Some(status),
+                time_ms: 5,
+                assertions: vec![],
+                error: None,
+            },
+        }
+    }
+
+    fn outcome_err(msg: &str) -> golden_core::runner::SingleOutcome {
+        golden_core::runner::SingleOutcome {
+            response: None,
+            result: golden_core::result::RequestResult {
+                name: "a".into(),
+                method: "GET".into(),
+                url: "http://x".into(),
+                status: None,
+                time_ms: 0,
+                assertions: vec![],
+                error: Some(msg.into()),
+            },
+        }
+    }
+
     #[test]
     fn drain_send_processes_done_ok_message() {
-        use golden_core::http::HttpResponse;
         use std::sync::mpsc;
         use std::sync::{atomic::AtomicBool, Arc};
 
         let (tx, rx) = mpsc::channel::<SendMsg>();
-        let resp = HttpResponse {
-            status: 200,
-            headers: vec![],
-            body: b"ok".to_vec(),
-            time_ms: 5,
-        };
-        tx.send(SendMsg::Done(Ok(resp))).unwrap();
+        tx.send(SendMsg::Done(Box::new(outcome_ok(200)))).unwrap();
 
         let mut app = make_app(J);
         app.sending = true;
@@ -823,7 +925,7 @@ mod tests {
         use std::sync::{atomic::AtomicBool, Arc};
 
         let (tx, rx) = mpsc::channel::<SendMsg>();
-        tx.send(SendMsg::Done(Err("connection refused".into())))
+        tx.send(SendMsg::Done(Box::new(outcome_err("connection refused"))))
             .unwrap();
 
         let mut app = make_app(J);
@@ -837,6 +939,11 @@ mod tests {
         assert!(!app.sending);
         assert!(app.last_response.is_none());
         assert_eq!(app.last_error.as_deref(), Some("connection refused"));
+        // The script/transport error is also surfaced on the Tests tab (which now
+        // renders even with no response), so last_script_error must be populated.
+        assert_eq!(app.last_script_error.as_deref(), Some("connection refused"));
+        // The stale "sending…" status must be cleared after completion.
+        assert!(app.status.is_empty(), "status cleared, got: {}", app.status);
     }
 
     #[test]
@@ -911,13 +1018,11 @@ mod tests {
 
     #[test]
     fn r_opens_run_overlay_for_current_collection() {
-        use crate::tui::app::{Mode, Pane};
+        use crate::tui::app::Mode;
         // J has a collection at index 0; select row 0 (the collection header).
-        // `r` runs the collection only when focus is NOT on the tree pane
-        // (in the tree pane, `r` is now "rename").
+        // `r` on a collection runs the whole collection (from any pane).
         let mut app = make_app(J);
         app.selected = 0;
-        app.focus = Pane::Request; // move focus away from tree so `r` = run
         let mut run_handle = None;
         handle_key(
             &mut app,
@@ -929,6 +1034,53 @@ mod tests {
         assert_eq!(app.mode, Mode::Run);
         assert!(app.run.running);
         assert!(run_handle.is_some());
+    }
+
+    #[test]
+    fn r_on_folder_row_runs_only_folder_subtree() {
+        use crate::tui::app::Mode;
+        // J: collection "Sample" with folder "auth" (1 request "login") and a
+        // sibling request "ping" outside the folder. Row 1 is the "auth" folder.
+        let mut app = make_app(J);
+        app.selected = 1; // the "auth" folder row
+        assert_eq!(
+            app.current_row().map(|r| r.name.clone()),
+            Some("auth".to_string()),
+            "row 1 should be the auth folder"
+        );
+        let mut run_handle = None;
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('r')),
+            &mut None,
+            &mut run_handle,
+            std::path::Path::new("/tmp"),
+        );
+        assert_eq!(app.mode, Mode::Run);
+        assert!(run_handle.is_some(), "a run handle should be spawned");
+        // Only the folder's leaf requests count toward the total (1 "login"),
+        // NOT the sibling "ping" outside the folder.
+        assert_eq!(
+            app.run.total, 1,
+            "folder run should cover only the folder subtree, got {}",
+            app.run.total
+        );
+    }
+
+    #[test]
+    fn r_on_request_row_starts_send() {
+        let (mut app, _dir) = make_app_with_file(J_FLAT);
+        app.selected = 1; // the "ping" request row
+        let mut send_handle: Option<SendHandle> = None;
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('r')),
+            &mut send_handle,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+        assert!(app.sending, "r on a request should start a send");
+        assert!(send_handle.is_some(), "a send handle should be spawned");
     }
 
     #[test]
@@ -964,6 +1116,42 @@ mod tests {
     }
 
     #[test]
+    fn esc_cancels_in_flight_run() {
+        use crate::tui::app::Mode;
+        use std::sync::{atomic::AtomicBool, mpsc, Arc};
+
+        let mut app = make_app(J);
+        app.mode = Mode::Run;
+        app.run.running = true;
+
+        // A real, live run handle so Esc exercises the cancel branch.
+        let (_tx, rx) = mpsc::channel::<RunMsg>();
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let mut run_handle: Option<RunHandle> = Some(RunHandle {
+            rx,
+            cancel: cancel_flag.clone(),
+            join: None,
+        });
+
+        handle_key(
+            &mut app,
+            key(KeyCode::Esc),
+            &mut None,
+            &mut run_handle,
+            std::path::Path::new("/tmp"),
+        );
+
+        assert!(
+            cancel_flag.load(std::sync::atomic::Ordering::SeqCst),
+            "Esc should signal the run's cancel flag"
+        );
+        assert!(!app.run.running, "run.running should be reset");
+        assert_eq!(app.mode, Mode::Normal, "overlay should close");
+        assert_eq!(app.status, "run cancelled");
+        assert!(run_handle.is_none(), "the run handle should be taken");
+    }
+
+    #[test]
     fn drain_run_processes_done_message() {
         use golden_core::result::{RunResult, Totals};
         use std::sync::mpsc;
@@ -981,7 +1169,11 @@ mod tests {
         let mut app = make_app(J);
         app.run.running = true;
         app.run.total = 3;
-        let mut handle: Option<RunHandle> = Some(RunHandle { rx, join: None });
+        let mut handle: Option<RunHandle> = Some(RunHandle {
+            rx,
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            join: None,
+        });
         drain_run(&mut app, &mut handle);
         assert!(!app.run.running);
         assert_eq!(app.run.done, 3);
@@ -995,7 +1187,11 @@ mod tests {
         let (_tx, rx) = mpsc::channel::<RunMsg>();
         let mut app = make_app(J);
         app.run.running = true;
-        let mut handle: Option<RunHandle> = Some(RunHandle { rx, join: None });
+        let mut handle: Option<RunHandle> = Some(RunHandle {
+            rx,
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            join: None,
+        });
         drain_run(&mut app, &mut handle);
         assert!(app.run.running); // unchanged
         assert!(handle.is_some()); // still present
@@ -1737,7 +1933,7 @@ mod tests {
     }
 
     #[test]
-    fn r_key_in_tree_pane_opens_rename_prompt() {
+    fn f2_key_in_tree_pane_opens_rename_prompt() {
         use crate::tui::app::{Mode, Pane};
         let (mut app, _dir) = make_app_crud(J_ONE);
         app.selected = 1; // "ping"
@@ -1745,7 +1941,7 @@ mod tests {
 
         handle_key(
             &mut app,
-            key(KeyCode::Char('r')),
+            key(KeyCode::F(2)),
             &mut None,
             &mut None,
             std::path::Path::new("/tmp"),
@@ -1759,7 +1955,7 @@ mod tests {
     }
 
     #[test]
-    fn r_then_name_then_enter_renames_request() {
+    fn f2_then_name_then_enter_renames_request() {
         use crate::tui::app::Mode;
         use golden_core::store;
 
@@ -1769,7 +1965,7 @@ mod tests {
 
         handle_key(
             &mut app,
-            key(KeyCode::Char('r')),
+            key(KeyCode::F(2)),
             &mut None,
             &mut None,
             dir.path(),
@@ -1842,13 +2038,14 @@ mod tests {
     }
 
     #[test]
-    fn c_key_outside_tree_pane_cancels_send_not_duplicate() {
+    fn c_while_sending_cancels_send_not_duplicate() {
         use crate::tui::app::Pane;
         use std::sync::{atomic::AtomicBool, mpsc, Arc};
 
         let (mut app, _dir) = make_app_crud(J_ONE);
         app.selected = 1;
         app.focus = Pane::Response; // NOT tree pane
+        app.sending = true; // a send is in flight → `c` aborts it
 
         // Provide an active send handle so the 'c' = cancel path is taken.
         let (_tx, rx) = mpsc::channel::<crate::tui::worker::SendMsg>();
@@ -1873,10 +2070,80 @@ mod tests {
             cancel_flag.load(std::sync::atomic::Ordering::Relaxed),
             "cancel flag should be set"
         );
+        assert!(!app.sending, "sending should be reset after cancel");
+        assert!(handle.is_none(), "send handle should be detached on cancel");
         // No duplicate in tree.
         assert!(
             !app.rows.iter().any(|r| r.name == "ping (Copy)"),
-            "c outside tree pane should NOT duplicate"
+            "c while sending should NOT duplicate"
+        );
+    }
+
+    #[test]
+    fn esc_while_sending_cancels_send() {
+        use std::sync::{atomic::AtomicBool, mpsc, Arc};
+
+        let mut app = make_app(J);
+        app.mode = crate::tui::app::Mode::Normal;
+        app.sending = true; // a send is in flight → Esc aborts it
+
+        let (_tx, rx) = mpsc::channel::<crate::tui::worker::SendMsg>();
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let mut handle: Option<SendHandle> = Some(SendHandle {
+            rx,
+            cancel: cancel_flag.clone(),
+            join: None,
+        });
+
+        handle_key(
+            &mut app,
+            key(KeyCode::Esc),
+            &mut handle,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+
+        assert!(
+            cancel_flag.load(std::sync::atomic::Ordering::Relaxed),
+            "Esc while sending should set the cancel flag"
+        );
+        assert!(!app.sending, "sending should be reset after Esc");
+        assert!(handle.is_none(), "send handle should be taken on cancel");
+    }
+
+    #[test]
+    fn second_send_keystroke_while_sending_is_ignored() {
+        // Guard against double-send: while a send is in flight, pressing `s` again
+        // must NOT replace the live handle (which would orphan the first worker).
+        use std::sync::{atomic::AtomicBool, mpsc, Arc};
+
+        let (mut app, _dir) = make_app_with_file(J_FLAT);
+        app.selected = 1; // the "ping" request row
+        app.sending = true; // a send is already in flight
+
+        // A live handle whose identity we can check stays untouched.
+        let (_tx, rx) = mpsc::channel::<crate::tui::worker::SendMsg>();
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let mut handle: Option<SendHandle> = Some(SendHandle {
+            rx,
+            cancel: cancel_flag.clone(),
+            join: None,
+        });
+        let original_cancel = Arc::as_ptr(&handle.as_ref().unwrap().cancel);
+
+        handle_key(
+            &mut app,
+            key(KeyCode::Char('s')),
+            &mut handle,
+            &mut None,
+            std::path::Path::new("/tmp"),
+        );
+
+        assert!(app.sending, "still sending after the ignored keystroke");
+        let still = handle.as_ref().expect("handle must not be dropped");
+        assert!(
+            std::ptr::eq(Arc::as_ptr(&still.cancel), original_cancel),
+            "the original send handle must not be replaced by a second send"
         );
     }
 

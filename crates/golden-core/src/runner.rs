@@ -24,6 +24,7 @@ struct RunUnit<'a> {
     request: &'a Request,
     pre: Vec<String>,
     post: Vec<String>,
+    path: Vec<usize>,
 }
 
 /// Read a collection-level script. Postman stores the top-level `event` array in
@@ -44,9 +45,12 @@ fn collect_units<'a>(
     items: &'a [Item],
     folder_pre: &[String],
     folder_test: &[String],
+    prefix: &[usize],
     out: &mut Vec<RunUnit<'a>>,
 ) {
-    for item in items {
+    for (idx, item) in items.iter().enumerate() {
+        let mut path = prefix.to_vec();
+        path.push(idx);
         if let Some(children) = &item.item {
             let mut fp = folder_pre.to_vec();
             if let Some(s) = script_for(item, "prerequest") {
@@ -56,7 +60,7 @@ fn collect_units<'a>(
             if let Some(s) = script_for(item, "test") {
                 ft.push(s);
             }
-            collect_units(children, &fp, &ft, out);
+            collect_units(children, &fp, &ft, &path, out);
         } else if let Some(request) = &item.request {
             let mut pre = folder_pre.to_vec();
             if let Some(s) = script_for(item, "prerequest") {
@@ -72,6 +76,7 @@ fn collect_units<'a>(
                 request,
                 pre,
                 post,
+                path,
             });
         }
     }
@@ -106,6 +111,33 @@ pub fn run_with_options(
     bail: bool,
     data: &[HashMap<String, String>],
 ) -> RunResult {
+    run_inner(coll, scopes, iterations, cfg, bail, data, None)
+}
+
+/// As `run`, but a cooperative `cancel` flag (checked between requests) stops the run.
+pub fn run_with_cancel(
+    coll: &Collection,
+    scopes: &VarScopes,
+    iterations: u32,
+    cfg: &HttpConfig,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> RunResult {
+    run_inner(coll, scopes, iterations, cfg, false, &[], cancel.as_deref())
+}
+
+/// The shared run loop behind `run`/`run_with_bail`/`run_with_options`/`run_with_cancel`.
+/// `cancel`, when present, is checked between requests so an in-flight run can stop
+/// cooperatively.
+#[allow(clippy::too_many_arguments)]
+fn run_inner(
+    coll: &Collection,
+    scopes: &VarScopes,
+    iterations: u32,
+    cfg: &HttpConfig,
+    bail: bool,
+    data: &[HashMap<String, String>],
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> RunResult {
     let engine = RquickJsEngine::new();
     let mut collection_result = CollectionResult {
         name: coll.info.name.clone(),
@@ -121,7 +153,7 @@ pub fn run_with_options(
     let coll_pre = collection_script(coll, "prerequest");
     let coll_test = collection_script(coll, "test");
     let mut units: Vec<RunUnit> = Vec::new();
-    collect_units(&coll.item, &[], &[], &mut units);
+    collect_units(&coll.item, &[], &[], &[], &mut units);
 
     // Data rows drive the iteration count when present (Postman behaviour).
     let iters = if data.is_empty() {
@@ -148,6 +180,11 @@ pub fn run_with_options(
         let mut steps = 0usize;
         let max_steps = units.len().saturating_mul(4) + 8;
         while idx < units.len() {
+            if let Some(c) = cancel {
+                if c.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
+            }
             steps += 1;
             if steps > max_steps {
                 break;
@@ -162,7 +199,7 @@ pub fn run_with_options(
             if let Some(s) = &coll_test {
                 post.push(s.clone());
             }
-            let (rr, next) = run_one(
+            let (rr, next, _resp) = run_one(
                 &engine,
                 unit.item,
                 unit.request,
@@ -227,6 +264,70 @@ pub fn run_with_options(
     }
 }
 
+/// Response + result for a single request executed through the script pipeline.
+#[derive(Debug)]
+pub struct SingleOutcome {
+    pub response: Option<crate::http::HttpResponse>,
+    pub result: RequestResult,
+}
+
+/// Run exactly one leaf request, located by its index `target_path` within the
+/// collection's item tree, including the collection + ancestor folder prerequest/
+/// test scripts. Mirrors a batch run for that single request.
+pub fn run_single(
+    coll: &Collection,
+    target_path: &[usize],
+    scopes: &VarScopes,
+    cfg: &HttpConfig,
+) -> SingleOutcome {
+    let engine = RquickJsEngine::new();
+    let coll_pre = collection_script(coll, "prerequest");
+    let coll_test = collection_script(coll, "test");
+    let mut units: Vec<RunUnit> = Vec::new();
+    collect_units(&coll.item, &[], &[], &[], &mut units);
+
+    let Some(unit) = units.iter().find(|u| u.path == target_path) else {
+        return SingleOutcome {
+            response: None,
+            result: RequestResult {
+                name: String::new(),
+                method: String::new(),
+                url: String::new(),
+                status: None,
+                time_ms: 0,
+                assertions: Vec::new(),
+                error: Some("request not found".into()),
+            },
+        };
+    };
+
+    let mut live: HashMap<String, String> = scopes.as_map().clone();
+    let mut pre = Vec::new();
+    if let Some(s) = &coll_pre {
+        pre.push(s.clone());
+    }
+    pre.extend(unit.pre.iter().cloned());
+    let mut post = unit.post.clone();
+    if let Some(s) = &coll_test {
+        post.push(s.clone());
+    }
+
+    let empty_row = HashMap::new();
+    let (result, _next, response) = run_one(
+        &engine,
+        unit.item,
+        unit.request,
+        &pre,
+        &post,
+        0,
+        1,
+        &empty_row,
+        &mut live,
+        cfg,
+    );
+    SingleOutcome { response, result }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_one(
     engine: &RquickJsEngine,
@@ -239,7 +340,11 @@ fn run_one(
     data_row: &HashMap<String, String>,
     live: &mut HashMap<String, String>,
     cfg: &HttpConfig,
-) -> (RequestResult, Option<Option<String>>) {
+) -> (
+    RequestResult,
+    Option<Option<String>>,
+    Option<crate::http::HttpResponse>,
+) {
     let name = item.name.clone();
     let mut next_request = None;
 
@@ -266,7 +371,7 @@ fn run_one(
                 assertions: pre_assertions,
                 error: Some(format!("pre-request script error: {err}")),
             };
-            return (rr, next_request);
+            return (rr, next_request, None);
         }
     }
 
@@ -283,7 +388,7 @@ fn run_one(
                 assertions: Vec::new(),
                 error: Some(e),
             };
-            return (rr, next_request);
+            return (rr, next_request, None);
         }
     };
 
@@ -322,7 +427,7 @@ fn run_one(
         assertions,
         error: script_error,
     };
-    (rr, next_request)
+    (rr, next_request, Some(resp))
 }
 
 /// Apply scope mutations to the live variable set (chaining). All scopes fold
@@ -764,5 +869,138 @@ mod tests {
         assert_eq!(result.collections[0].iterations.len(), 3);
         assert_eq!(result.collections[0].stats.len(), 1);
         assert_eq!(result.collections[0].stats[0].name, "x");
+    }
+
+    #[test]
+    fn run_single_returns_response_and_assertions() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/u");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{"ok":true}"#);
+        });
+        let json = format!(
+            r#"{{"info":{{"name":"C"}},"item":[
+              {{"name":"a","request":{{"method":"GET","url":"{b}/u"}},
+               "event":[{{"listen":"test","script":{{"exec":[
+                 "pm.test('status 200', function () {{ pm.response.to.have.status(200); }});",
+                 "pm.test('FAILS', function () {{ pm.expect(1).to.equal(2); }});"]}}}}]}}
+            ]}}"#,
+            b = server.base_url()
+        );
+        let coll: Collection = serde_json::from_str(&json).unwrap();
+        let out = run_single(&coll, &[0], &VarScopes::default(), &HttpConfig::default());
+        assert_eq!(out.response.as_ref().unwrap().status, 200);
+        assert_eq!(out.result.assertions.len(), 2);
+        assert!(out.result.assertions[0].passed);
+        assert!(!out.result.assertions[1].passed);
+    }
+
+    #[test]
+    fn run_single_wraps_nested_leaf_with_ancestor_scripts() {
+        // collection-level prerequest+test, a folder with folder-level
+        // prerequest+test, and a request nested under that folder. Targeting the
+        // nested leaf by path &[0,0] must wrap it in BOTH the folder and collection
+        // test scripts (proving ancestor chains apply), and actually hit the leaf.
+        let server = MockServer::start();
+        let hit = server.mock(|when, then| {
+            when.method(GET).path("/nested");
+            then.status(200).body("ok");
+        });
+        let json = format!(
+            r#"{{
+              "info": {{ "name": "C" }},
+              "event": [
+                {{ "listen": "prerequest", "script": {{ "exec": [
+                  "pm.environment.set('fromColl','C');" ] }} }},
+                {{ "listen": "test", "script": {{ "exec": [
+                  "pm.test('collection test ran', function () {{ pm.expect(true).to.be.true; }});" ] }} }}],
+              "item": [{{
+                "name": "Folder",
+                "event": [
+                  {{ "listen": "prerequest", "script": {{ "exec": [
+                    "pm.environment.set('fromFolder','F');" ] }} }},
+                  {{ "listen": "test", "script": {{ "exec": [
+                    "pm.test('folder saw coll+folder vars', function () {{ pm.expect(pm.environment.get('fromColl')).to.equal('C'); pm.expect(pm.environment.get('fromFolder')).to.equal('F'); }});" ] }} }}],
+                "item": [{{
+                  "name": "req",
+                  "request": {{ "method": "GET", "url": "{base}/nested" }}
+                }}]
+              }}]
+            }}"#,
+            base = server.base_url()
+        );
+        let coll: Collection = serde_json::from_str(&json).unwrap();
+        // Nested leaf path: collection item 0 (Folder) -> child 0 (req).
+        let out = run_single(
+            &coll,
+            &[0, 0],
+            &VarScopes::default(),
+            &HttpConfig::default(),
+        );
+        hit.assert(); // the leaf endpoint was actually hit
+        assert_eq!(out.response.as_ref().unwrap().status, 200);
+        let names: Vec<&str> = out
+            .result
+            .assertions
+            .iter()
+            .map(|a| a.name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"folder saw coll+folder vars"),
+            "folder test did not wrap the nested leaf: {names:?}"
+        );
+        assert!(
+            names.contains(&"collection test ran"),
+            "collection test did not wrap the nested leaf: {names:?}"
+        );
+        assert!(
+            out.result.assertions.iter().all(|a| a.passed),
+            "an ancestor assertion failed: {:?}",
+            out.result.assertions
+        );
+    }
+
+    #[test]
+    fn run_single_reports_connection_error_with_no_response() {
+        let coll: Collection = serde_json::from_str(
+            r#"{"info":{"name":"C"},"item":[
+               {"name":"a","request":{"method":"GET","url":"http://127.0.0.1:1/x"}}]}"#,
+        )
+        .unwrap();
+        let out = run_single(&coll, &[0], &VarScopes::default(), &HttpConfig::default());
+        assert!(out.response.is_none());
+        assert!(out.result.error.is_some());
+    }
+
+    #[test]
+    fn run_with_cancel_stops_when_flag_preset() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.path("/a");
+            then.status(200);
+        });
+        let json = format!(
+            r#"{{"info":{{"name":"C"}},"item":[
+              {{"name":"a","request":{{"method":"GET","url":"{b}/a"}}}},
+              {{"name":"b","request":{{"method":"GET","url":"{b}/a"}}}}]}}"#,
+            b = server.base_url()
+        );
+        let coll: Collection = serde_json::from_str(&json).unwrap();
+        let cancel = Arc::new(AtomicBool::new(true)); // already cancelled
+        let result = run_with_cancel(
+            &coll,
+            &VarScopes::default(),
+            1,
+            &HttpConfig::default(),
+            Some(cancel),
+        );
+        assert_eq!(
+            result.totals.requests, 0,
+            "cancelled before first request runs"
+        );
     }
 }

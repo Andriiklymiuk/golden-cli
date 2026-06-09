@@ -133,6 +133,10 @@ pub struct App {
     pub last_error: Option<String>,
     /// True while a send is in flight (drives the spinner + enables cancel).
     pub sending: bool,
+    /// Assertions from the most recent single send (cleared on a new send).
+    pub last_assertions: Vec<golden_core::result::Assertion>,
+    /// Test/pre-request script error from the most recent send, if any (response present).
+    pub last_script_error: Option<String>,
     /// Which sub-tab of the response pane is active.
     pub response_tab: ResponseTab,
     /// Vertical scroll offset for the response body.
@@ -181,6 +185,8 @@ impl App {
             last_response: None,
             last_error: None,
             sending: false,
+            last_assertions: Vec::new(),
+            last_script_error: None,
             response_tab: ResponseTab::Body,
             response_scroll: 0,
             run: RunState::default(),
@@ -328,6 +334,17 @@ impl App {
         // row.path == [collection_index, rest...]
         let (ci, rest) = row.path.split_first()?;
         Some((*ci, rest.to_vec()))
+    }
+
+    /// The (collection, target_path_within_collection) for the selected row, used by
+    /// the send worker. `target_path` is the row path minus the leading collection index.
+    pub fn selected_send_target(&self) -> Option<(golden_core::model::Collection, Vec<usize>)> {
+        let row = self.current_row()?;
+        if row.kind != NodeKind::Request {
+            return None;
+        }
+        let coll = self.collections.get(row.path[0])?.collection.clone();
+        Some((coll, row.path[1..].to_vec()))
     }
 
     /// Open an edit session for the currently focused field of the selected request.
