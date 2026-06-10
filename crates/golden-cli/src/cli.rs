@@ -8,6 +8,7 @@ pub use clap_complete;
 #[command(
     name = "golden",
     version,
+    disable_version_flag = true,
     about = "Run Postman v2.1 collections headlessly"
 )]
 pub struct Cli {
@@ -15,8 +16,12 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
+    /// Print version.
+    #[arg(short = 'v', short_alias = 'V', long = "version", action = clap::ArgAction::Version)]
+    version: Option<bool>,
+
     /// Override collection roots to scan (repeatable). Also reads GOLDEN_COLLECTIONS_PATHS.
-    #[arg(long, global = true, value_name = "PATH")]
+    #[arg(short = 'c', long, global = true, value_name = "PATH")]
     pub collections: Vec<String>,
 }
 
@@ -39,13 +44,13 @@ pub enum Command {
         /// Source: a .json file, a directory, or a curl command string.
         source: String,
         /// Name for the imported collection (defaults to file/info name).
-        #[arg(long)]
+        #[arg(short = 'n', long)]
         name: Option<String>,
         /// Merge strategy when the destination exists: add | replace | skip.
-        #[arg(long, default_value = "skip")]
+        #[arg(short = 's', long, default_value = "skip")]
         strategy: String,
         /// Input kind: auto | postman | raw | folder | openapi | curl.
-        #[arg(long = "from", default_value = "auto")]
+        #[arg(short = 'f', long = "from", default_value = "auto")]
         from: String,
     },
     /// Generate a shell completion script (bash, zsh, fish, powershell, elvish).
@@ -59,7 +64,7 @@ pub enum Command {
     /// Check the workspace + golden setup; report problems and how to fix them.
     Doctor {
         /// Apply safe fixes (e.g. seed `collections/` when none are found).
-        #[arg(long)]
+        #[arg(short = 'f', long)]
         fix: bool,
     },
 }
@@ -94,40 +99,40 @@ pub struct RunArgs {
     pub paths: Vec<String>,
 
     /// Select/override the .env (name or path).
-    #[arg(long, value_name = "NAME|PATH")]
+    #[arg(short = 'e', long, value_name = "NAME|PATH")]
     pub env: Option<String>,
 
     /// Number of iterations.
-    #[arg(long, default_value_t = 1, value_name = "N")]
+    #[arg(short = 'n', long, default_value_t = 1, value_name = "N")]
     pub iterations: u32,
 
     /// Stop on the first assertion failure.
-    #[arg(long)]
+    #[arg(short = 'b', long)]
     pub bail: bool,
 
     /// Output format (repeatable). Default: pretty.
-    #[arg(long, value_enum, value_name = "FORMAT")]
+    #[arg(short = 'r', long, value_enum, value_name = "FORMAT")]
     pub reporter: Vec<ReporterKind>,
 
     /// Write reporter output to a file (else stdout).
-    #[arg(long, value_name = "FILE")]
+    #[arg(short = 'o', long, value_name = "FILE")]
     pub output: Option<String>,
 
     /// Disable TLS verification for all hosts.
-    #[arg(long)]
+    #[arg(short = 'k', long)]
     pub insecure: bool,
 
     /// Per-request timeout in milliseconds.
-    #[arg(long, value_name = "MS")]
+    #[arg(short = 't', long, value_name = "MS")]
     pub timeout: Option<u64>,
 
     /// Include only requests/folders whose name matches this glob.
-    #[arg(long, value_name = "GLOB")]
+    #[arg(short = 'f', long, value_name = "GLOB")]
     pub filter: Option<String>,
 
     /// Data file (JSON array of objects, or CSV) for a data-driven run: one row
     /// per iteration, overlaying the variables and feeding pm.iterationData.
-    #[arg(long, value_name = "FILE")]
+    #[arg(short = 'd', long, value_name = "FILE")]
     pub data: Option<String>,
 }
 
@@ -138,7 +143,7 @@ pub struct ListArgs {
     pub paths: Vec<String>,
 
     /// Include only requests/folders whose name matches this glob.
-    #[arg(long, value_name = "GLOB")]
+    #[arg(short = 'f', long, value_name = "GLOB")]
     pub filter: Option<String>,
 }
 
@@ -153,27 +158,27 @@ pub struct SendArgs {
     pub request: String,
 
     /// Select/override the .env (name or path).
-    #[arg(long, value_name = "NAME|PATH")]
+    #[arg(short = 'e', long, value_name = "NAME|PATH")]
     pub env: Option<String>,
 
     /// Disable TLS verification for all hosts.
-    #[arg(long)]
+    #[arg(short = 'k', long)]
     pub insecure: bool,
 
     /// Per-request timeout in milliseconds.
-    #[arg(long, value_name = "MS")]
+    #[arg(short = 't', long, value_name = "MS")]
     pub timeout: Option<u64>,
 
     /// Write the response body to a file instead of stdout.
-    #[arg(long, value_name = "FILE")]
+    #[arg(short = 'o', long, value_name = "FILE")]
     pub output: Option<std::path::PathBuf>,
 
     /// Max download size in bytes (aborts and removes partial file if exceeded).
-    #[arg(long = "max-size", value_name = "BYTES")]
+    #[arg(short = 'm', long = "max-size", value_name = "BYTES")]
     pub max_size: Option<u64>,
 
     /// Overwrite the output file without confirmation.
-    #[arg(long)]
+    #[arg(short = 'f', long)]
     pub force: bool,
 
     /// After the response, print Set-Cookie headers.
@@ -194,7 +199,7 @@ pub struct CurlArgs {
     #[arg(value_name = "REQUEST")]
     pub request: String,
     /// Mask sensitive header values (Authorization/Cookie/X-API-Key/Bearer/Basic).
-    #[arg(long)]
+    #[arg(short = 'm', long)]
     pub mask: bool,
     /// Follow redirects (-L).
     #[arg(short = 'L', long = "follow")]
@@ -218,7 +223,7 @@ pub struct CurlArgs {
     #[arg(short = 'w', long = "timing")]
     pub timing: bool,
     /// Download to file (-O -J).
-    #[arg(long = "download")]
+    #[arg(short = 'O', long = "download")]
     pub download: bool,
 }
 
@@ -346,6 +351,78 @@ mod tests {
                 from,
             }) => {
                 assert_eq!(source, "spec.json");
+                assert_eq!(name.as_deref(), Some("MyAPI"));
+                assert_eq!(strategy, "add");
+                assert_eq!(from, "openapi");
+            }
+            _ => panic!("expected import"),
+        }
+    }
+
+    #[test]
+    fn version_flag_works_with_short_v_and_capital_v() {
+        for flag in ["-v", "-V", "--version"] {
+            let err = Cli::try_parse_from(["golden", flag]).unwrap_err();
+            assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
+        }
+    }
+
+    #[test]
+    fn parses_run_with_short_flags() {
+        let cli = Cli::try_parse_from([
+            "golden", "run", "-e", ".env.staging", "-n", "3", "-b", "-r", "junit", "-o", "out.xml",
+            "-k", "-t", "5000", "-f", "auth/*", "-d", "rows.csv", "-c", "collections/",
+        ])
+        .unwrap();
+        assert_eq!(cli.collections, vec!["collections/".to_string()]);
+        match cli.command {
+            Some(Command::Run(args)) => {
+                assert_eq!(args.env.as_deref(), Some(".env.staging"));
+                assert_eq!(args.iterations, 3);
+                assert!(args.bail);
+                assert_eq!(args.reporter, vec![ReporterKind::Junit]);
+                assert_eq!(args.output.as_deref(), Some("out.xml"));
+                assert!(args.insecure);
+                assert_eq!(args.timeout, Some(5000));
+                assert_eq!(args.filter.as_deref(), Some("auth/*"));
+                assert_eq!(args.data.as_deref(), Some("rows.csv"));
+            }
+            _ => panic!("expected run"),
+        }
+    }
+
+    #[test]
+    fn parses_send_with_short_flags() {
+        let cli = Cli::try_parse_from([
+            "golden", "send", "Sample", "login", "-e", ".env", "-k", "-t", "1000", "-o",
+            "/tmp/out.bin", "-m", "1048576", "-f",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Send(args)) => {
+                assert_eq!(args.env.as_deref(), Some(".env"));
+                assert!(args.insecure);
+                assert_eq!(args.timeout, Some(1000));
+                assert_eq!(args.max_size, Some(1048576));
+                assert!(args.force);
+            }
+            _ => panic!("expected send"),
+        }
+    }
+
+    #[test]
+    fn parses_import_with_short_flags() {
+        let cli = Cli::try_parse_from([
+            "golden", "import", "spec.json", "-n", "MyAPI", "-s", "add", "-f", "openapi",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Import {
+                name,
+                strategy,
+                from,
+                ..
+            }) => {
                 assert_eq!(name.as_deref(), Some("MyAPI"));
                 assert_eq!(strategy, "add");
                 assert_eq!(from, "openapi");
