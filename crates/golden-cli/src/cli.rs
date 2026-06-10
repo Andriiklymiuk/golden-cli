@@ -370,8 +370,26 @@ mod tests {
     #[test]
     fn parses_run_with_short_flags() {
         let cli = Cli::try_parse_from([
-            "golden", "run", "-e", ".env.staging", "-n", "3", "-b", "-r", "junit", "-o", "out.xml",
-            "-k", "-t", "5000", "-f", "auth/*", "-d", "rows.csv", "-c", "collections/",
+            "golden",
+            "run",
+            "-e",
+            ".env.staging",
+            "-n",
+            "3",
+            "-b",
+            "-r",
+            "junit",
+            "-o",
+            "out.xml",
+            "-k",
+            "-t",
+            "5000",
+            "-f",
+            "auth/*",
+            "-d",
+            "rows.csv",
+            "-c",
+            "collections/",
         ])
         .unwrap();
         assert_eq!(cli.collections, vec!["collections/".to_string()]);
@@ -394,8 +412,20 @@ mod tests {
     #[test]
     fn parses_send_with_short_flags() {
         let cli = Cli::try_parse_from([
-            "golden", "send", "Sample", "login", "-e", ".env", "-k", "-t", "1000", "-o",
-            "/tmp/out.bin", "-m", "1048576", "-f",
+            "golden",
+            "send",
+            "Sample",
+            "login",
+            "-e",
+            ".env",
+            "-k",
+            "-t",
+            "1000",
+            "-o",
+            "/tmp/out.bin",
+            "-m",
+            "1048576",
+            "-f",
         ])
         .unwrap();
         match cli.command {
@@ -413,7 +443,15 @@ mod tests {
     #[test]
     fn parses_import_with_short_flags() {
         let cli = Cli::try_parse_from([
-            "golden", "import", "spec.json", "-n", "MyAPI", "-s", "add", "-f", "openapi",
+            "golden",
+            "import",
+            "spec.json",
+            "-n",
+            "MyAPI",
+            "-s",
+            "add",
+            "-f",
+            "openapi",
         ])
         .unwrap();
         match cli.command {
