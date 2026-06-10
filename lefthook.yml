@@ -1,0 +1,10 @@
+pre-commit:
+  commands:
+    rustfmt:
+      glob: "*.rs"
+      run: cargo fmt --all -- --check
+
+pre-push:
+  commands:
+    clippy:
+      run: cargo clippy --workspace --all-targets -- -D warnings
