@@ -56,7 +56,13 @@ pub fn execute() -> i32 {
         InstallMethod::Homebrew => {
             println!("Homebrew install detected — upgrading via brew…");
             let _ = Command::new("brew").arg("update").status();
-            match Command::new("brew").args(["upgrade", TAP_FORMULA]).status() {
+            // Homebrew 5 "ask mode" prompts before upgrading; the user already
+            // confirmed by running `golden upgrade`, so skip the second prompt.
+            match Command::new("brew")
+                .env("HOMEBREW_NO_ASK", "1")
+                .args(["upgrade", TAP_FORMULA])
+                .status()
+            {
                 Ok(s) if s.success() => {
                     println!("Upgraded.");
                     0
