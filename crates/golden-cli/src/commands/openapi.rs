@@ -78,13 +78,21 @@ fn build_spec(collections: &[Collection], args: &OpenapiArgs) -> Value {
     // path -> { method -> operation }
     let mut paths: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
     let mut skipped: BTreeMap<String, usize> = BTreeMap::new();
+    // collection name -> ordered unique tag list (drives x-tagGroups two-level nav)
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     for collection in collections {
+        let mut tags = Vec::new();
         add_items(
             &collection.item,
             &collection.info.name,
+            None,
+            &mut tags,
             &mut paths,
             &mut skipped,
         );
+        if !tags.is_empty() {
+            groups.push((collection.info.name.clone(), tags));
+        }
     }
     for (key, count) in &skipped {
         // Many requests can legitimately share one path+method (e.g. GraphQL endpoints:
@@ -95,6 +103,27 @@ fn build_spec(collections: &[Collection], args: &OpenapiArgs) -> Value {
         );
     }
 
+    // x-tagGroups: collection -> its folder tags. Renderers that support it (Scalar,
+    // Redoc) show a two-level sidebar; others ignore the vendor extension. The tag
+    // declarations carry x-displayName so the sidebar shows just the folder name
+    // while the tag itself stays globally unique.
+    let tag_groups: Vec<Value> = groups
+        .iter()
+        .map(|(name, tags)| json!({ "name": name, "tags": tags }))
+        .collect();
+    let tag_decls: Vec<Value> = groups
+        .iter()
+        .flat_map(|(name, tags)| {
+            tags.iter().map(move |tag| {
+                let display = tag
+                    .strip_prefix(name.as_str())
+                    .and_then(|rest| rest.strip_prefix(" / "))
+                    .unwrap_or(tag);
+                json!({ "name": tag, "x-displayName": display })
+            })
+        })
+        .collect();
+
     json!({
         "openapi": "3.0.3",
         "info": {
@@ -103,22 +132,38 @@ fn build_spec(collections: &[Collection], args: &OpenapiArgs) -> Value {
             "description": "Generated from golden collections by `golden openapi`."
         },
         "servers": [{ "url": server }],
+        "tags": tag_decls,
         "paths": paths,
+        "x-tagGroups": tag_groups,
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn add_items(
     items: &[Item],
-    tag: &str,
+    collection: &str,
+    folder: Option<&str>,
+    tags: &mut Vec<String>,
     paths: &mut BTreeMap<String, Map<String, Value>>,
     skipped: &mut BTreeMap<String, usize>,
 ) {
     for item in items {
         match &item.item {
-            Some(children) => add_items(children, tag, paths, skipped),
+            Some(children) => {
+                add_items(children, collection, Some(&item.name), tags, paths, skipped);
+            }
             None => {
                 if let Some(request) = &item.request {
-                    add_operation(&item.name, request, tag, paths, skipped);
+                    // Tag = "<collection> / <folder>" — folder names repeat across
+                    // collections, so the prefix keeps tags globally unique.
+                    let tag = match folder {
+                        Some(f) => format!("{collection} / {f}"),
+                        None => collection.to_string(),
+                    };
+                    if !tags.contains(&tag) {
+                        tags.push(tag.clone());
+                    }
+                    add_operation(&item.name, request, &tag, paths, skipped);
                 }
             }
         }
