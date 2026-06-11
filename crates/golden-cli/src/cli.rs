@@ -257,9 +257,10 @@ pub struct OpenapiArgs {
     #[arg(long, value_name = "TITLE")]
     pub title: Option<String>,
 
-    /// Server URL recorded in the spec (defaults to `{{baseUrl}}`).
-    #[arg(long, value_name = "URL")]
-    pub server: Option<String>,
+    /// Server recorded in the spec (repeatable; `NAME=URL` adds a description).
+    /// Defaults to a single `{{baseUrl}}` entry.
+    #[arg(long, value_name = "[NAME=]URL")]
+    pub server: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

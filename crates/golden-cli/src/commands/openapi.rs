@@ -70,10 +70,20 @@ fn build_spec(collections: &[Collection], args: &OpenapiArgs) -> Value {
         .clone()
         .or_else(|| collections.first().map(|c| c.info.name.clone()))
         .unwrap_or_else(|| "API".to_string());
-    let server = args
-        .server
-        .clone()
-        .unwrap_or_else(|| "{{baseUrl}}".to_string());
+    let servers: Vec<Value> = if args.server.is_empty() {
+        vec![json!({ "url": "{{baseUrl}}" })]
+    } else {
+        args.server
+            .iter()
+            .map(|entry| match entry.split_once('=') {
+                // `NAME=URL` → named server; a bare URL (scheme before any '=') stays as-is.
+                Some((name, url)) if !name.contains("://") && url.contains("://") => {
+                    json!({ "url": url, "description": name })
+                }
+                _ => json!({ "url": entry }),
+            })
+            .collect()
+    };
 
     // path -> { method -> operation }
     let mut paths: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
@@ -131,7 +141,7 @@ fn build_spec(collections: &[Collection], args: &OpenapiArgs) -> Value {
             "version": "1.0.0",
             "description": "Generated from golden collections by `golden openapi`."
         },
-        "servers": [{ "url": server }],
+        "servers": servers,
         "tags": tag_decls,
         "paths": paths,
         "x-tagGroups": tag_groups,
