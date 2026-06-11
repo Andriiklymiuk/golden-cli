@@ -77,8 +77,22 @@ fn build_spec(collections: &[Collection], args: &OpenapiArgs) -> Value {
 
     // path -> { method -> operation }
     let mut paths: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
+    let mut skipped: BTreeMap<String, usize> = BTreeMap::new();
     for collection in collections {
-        add_items(&collection.item, &collection.info.name, &mut paths);
+        add_items(
+            &collection.item,
+            &collection.info.name,
+            &mut paths,
+            &mut skipped,
+        );
+    }
+    for (key, count) in &skipped {
+        // Many requests can legitimately share one path+method (e.g. GraphQL endpoints:
+        // every query/mutation is a POST to the same URL). OpenAPI allows one operation
+        // per path+method, so the first request maps and the rest are summarized here.
+        eprintln!(
+            "golden: openapi: {key} maps {count} extra request(s) — kept the first operation only"
+        );
     }
 
     json!({
@@ -93,13 +107,18 @@ fn build_spec(collections: &[Collection], args: &OpenapiArgs) -> Value {
     })
 }
 
-fn add_items(items: &[Item], tag: &str, paths: &mut BTreeMap<String, Map<String, Value>>) {
+fn add_items(
+    items: &[Item],
+    tag: &str,
+    paths: &mut BTreeMap<String, Map<String, Value>>,
+    skipped: &mut BTreeMap<String, usize>,
+) {
     for item in items {
         match &item.item {
-            Some(children) => add_items(children, tag, paths),
+            Some(children) => add_items(children, tag, paths, skipped),
             None => {
                 if let Some(request) = &item.request {
-                    add_operation(&item.name, request, tag, paths);
+                    add_operation(&item.name, request, tag, paths, skipped);
                 }
             }
         }
@@ -111,6 +130,7 @@ fn add_operation(
     request: &Request,
     tag: &str,
     paths: &mut BTreeMap<String, Map<String, Value>>,
+    skipped: &mut BTreeMap<String, usize>,
 ) {
     let path = openapi_path(request.url.raw());
     if path.is_empty() {
@@ -146,10 +166,15 @@ fn add_operation(
         }),
     );
 
-    paths
-        .entry(path)
-        .or_default()
-        .insert(method, Value::Object(op));
+    let methods = paths.entry(path.clone()).or_default();
+    if methods.contains_key(&method) {
+        // One operation per path+method in OpenAPI; never silently overwrite.
+        *skipped
+            .entry(format!("{} {path}", method.to_uppercase()))
+            .or_default() += 1;
+        return;
+    }
+    methods.insert(method, Value::Object(op));
 }
 
 /// Strip the scheme/host (or `{{baseUrl}}` token) + query, then turn `{{var}}` and
