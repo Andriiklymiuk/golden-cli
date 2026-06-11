@@ -57,16 +57,17 @@ golden                       # no args → interactive TUI
 
 | Command                                           | What it does                                                                         |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `golden run [PATHS…]`                             | Run collections; reporters, `--filter`, `--env`, `--iterations`, `--data`, `--bail`. |
-| `golden list [PATHS…]`                            | List discovered collections + requests.                                              |
+| `golden run [PATHS…]`                             | Run collections; reporters, `--filter`, `-X/--method`, `--env`, `--iterations`, `--data`, `--bail`. |
+| `golden list [PATHS…]`                            | List discovered collections + requests (`--filter`, `-X/--method`).                  |
 | `golden send <COLL> <REQ>`                        | Fire one request, print the response.                                                |
 | `golden curl <COLL> <REQ>`                        | Print the equivalent `curl` (`--mask` redacts secrets).                              |
 | `golden import <SOURCE>`                          | Import Postman / OpenAPI 3.x / Swagger 2.0 / curl / folder.                          |
+| `golden openapi [PATHS…]`                         | Export an OpenAPI 3.0 spec from the collections (`-o`, `--title`, `--server`).       |
 | `golden init`                                     | Create `collections/` and seed the sample.                                           |
 | `golden history <list\|replay N\|on\|off\|clear>` | Persisted request history.                                                           |
 | `golden doctor [--fix]`                           | Health-check the workspace; `--fix` seeds `collections/`.                            |
 | `golden upgrade` (alias `update`)                 | Self-update via your install method (brew / installer).                              |
-| `golden completion <shell>`                       | Shell completions (bash/zsh/fish/powershell/elvish).                                 |
+| `golden completion <shell>`                       | **Dynamic** shell completion — tab-completes collection / request / env names.       |
 
 `--collections <PATH>` (repeatable) and `GOLDEN_COLLECTIONS_PATHS` override discovery on any command. `<COLL>` is a collection's `info.name` or a file path.
 
@@ -75,13 +76,16 @@ golden                       # no args → interactive TUI
 ```bash
 golden run collections/ --env .env.staging            # pick an environment
 golden run collections/ --filter 'Auth/*'             # only matching folders/requests
+golden run collections/ -X GET                        # only GETs — safe read-only sweep (no writes)
 golden run collections/ --data users.csv              # data-driven: one iteration per row
 golden run collections/ --reporter junit --output results.xml   # CI report
 golden run collections/ --reporter json --output run.json       # machine-readable for an agent
 golden send "My API" "Login" --env .env.local         # fire one request
 golden curl "My API" "Login" --mask                   # safe-to-paste curl
 golden import openapi.yaml --from openapi --name "Billing"      # scaffold from a spec
+golden openapi collections/ -o openapi.json --title "My API"    # export an OpenAPI spec
 golden run --collections api/collections --collections web/collections   # many services at once
+source <(COMPLETE=zsh golden)                         # dynamic tab-completion (add to ~/.zshrc)
 ```
 
 ## In CI

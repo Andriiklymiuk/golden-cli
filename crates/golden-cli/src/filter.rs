@@ -3,39 +3,60 @@
 
 use globset::{Glob, GlobMatcher};
 
-/// A compiled name filter. `None` matches everything.
+use golden_core::model::{Collection, Item};
+
+/// A compiled request filter: an optional name glob plus an optional HTTP-method
+/// allow-list. A `None` glob matches every name; an empty method list matches every
+/// method. The two compose — a request must pass both to be kept.
 pub struct Filter {
     matcher: Option<GlobMatcher>,
+    methods: Option<Vec<String>>,
 }
 
 impl Filter {
     /// Compile a glob, or build a pass-through filter when `pattern` is None.
     pub fn new(pattern: Option<&str>) -> Result<Self, String> {
-        match pattern {
-            None => Ok(Filter { matcher: None }),
-            Some(p) => {
-                let glob = Glob::new(p).map_err(|e| e.to_string())?;
-                Ok(Filter {
-                    matcher: Some(glob.compile_matcher()),
-                })
-            }
-        }
+        let matcher = match pattern {
+            None => None,
+            Some(p) => Some(Glob::new(p).map_err(|e| e.to_string())?.compile_matcher()),
+        };
+        Ok(Filter {
+            matcher,
+            methods: None,
+        })
     }
 
-    /// Does `name` pass the filter?
+    /// Restrict to the given HTTP methods (case-insensitive). Empty = no restriction.
+    pub fn with_methods(mut self, methods: &[String]) -> Self {
+        if !methods.is_empty() {
+            self.methods = Some(methods.iter().map(|m| m.to_uppercase()).collect());
+        }
+        self
+    }
+
+    /// Does `name` pass the name glob?
     pub fn matches(&self, name: &str) -> bool {
         match &self.matcher {
             None => true,
             Some(m) => m.is_match(name),
         }
     }
+
+    /// Does this request item pass the method allow-list?
+    pub fn method_ok(&self, item: &Item) -> bool {
+        match &self.methods {
+            None => true,
+            Some(allowed) => item
+                .request
+                .as_ref()
+                .is_some_and(|r| allowed.contains(&r.method.to_uppercase())),
+        }
+    }
 }
 
-use golden_core::model::{Collection, Item};
-
-/// Retain only requests whose name matches the filter; keep a folder only if it
-/// still has matching descendants. A request also stays if its parent folder
-/// name matches (folder-level filter). Mutates the collection's item tree.
+/// Retain only requests that pass the filter (name glob AND method allow-list); keep a
+/// folder only if it still has matching descendants. A request also passes the name check
+/// if its parent folder name matches (folder-level filter). Mutates the item tree.
 pub fn prune_collection(collection: &mut Collection, filter: &Filter) {
     collection.item = prune_items(std::mem::take(&mut collection.item), filter, false);
 }
@@ -51,7 +72,10 @@ fn prune_items(items: Vec<Item>, filter: &Filter, parent_matched: bool) -> Vec<I
                 item.item = Some(pruned);
                 kept.push(item);
             }
-        } else if item.is_request() && (parent_matched || filter.matches(&item.name)) {
+        } else if item.is_request()
+            && (parent_matched || filter.matches(&item.name))
+            && filter.method_ok(&item)
+        {
             kept.push(item);
         }
     }
@@ -132,5 +156,34 @@ mod tests {
         super::prune_collection(&mut c, &f);
         let kids = c.item[0].item.as_ref().unwrap();
         assert_eq!(kids.len(), 2);
+    }
+
+    #[test]
+    fn method_filter_keeps_only_matching_verbs() {
+        use golden_core::model::Collection;
+        let json = r#"{
+          "info": {"name":"C"},
+          "item": [
+            {"name":"read one","request":{"method":"GET","url":"x"}},
+            {"name":"make one","request":{"method":"post","url":"x"}}
+          ]
+        }"#;
+        let mut c: Collection = serde_json::from_str(json).unwrap();
+        // case-insensitive; composes with a pass-through name filter
+        let f = Filter::new(None)
+            .unwrap()
+            .with_methods(&["get".to_string()]);
+        prune_collection(&mut c, &f);
+        assert_eq!(c.item.len(), 1);
+        assert_eq!(c.item[0].name, "read one");
+    }
+
+    #[test]
+    fn empty_methods_is_no_restriction() {
+        let f = Filter::new(None).unwrap().with_methods(&[]);
+        let item: golden_core::model::Item =
+            serde_json::from_str(r#"{"name":"r","request":{"method":"DELETE","url":"x"}}"#)
+                .unwrap();
+        assert!(f.method_ok(&item));
     }
 }

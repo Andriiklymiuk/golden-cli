@@ -32,7 +32,7 @@ pub fn execute(args: &ListArgs, collections_override: &[String]) -> i32 {
     }
 
     let filter = match Filter::new(args.filter.as_deref()) {
-        Ok(f) => f,
+        Ok(f) => f.with_methods(&args.method),
         Err(e) => {
             eprintln!("golden: invalid --filter glob: {e}");
             return FATAL;

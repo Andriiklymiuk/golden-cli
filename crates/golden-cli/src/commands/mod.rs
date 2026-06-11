@@ -7,6 +7,7 @@ pub mod history;
 pub mod import;
 pub mod init;
 pub mod list;
+pub mod openapi;
 pub mod run;
 pub mod send;
 pub mod upgrade;

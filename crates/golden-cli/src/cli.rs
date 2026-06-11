@@ -2,6 +2,11 @@
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 pub use clap_complete;
+use clap_complete::ArgValueCompleter;
+
+use crate::commands::completion::{
+    complete_collections, complete_envs, complete_filter, complete_paths, complete_requests,
+};
 
 /// golden — run Postman v2.1 collections from the terminal and CI.
 #[derive(Debug, Parser)]
@@ -53,9 +58,11 @@ pub enum Command {
         #[arg(short = 'f', long = "from", default_value = "auto")]
         from: String,
     },
-    /// Generate a shell completion script (bash, zsh, fish, powershell, elvish).
+    /// Generate an OpenAPI 3.0 spec from the discovered collections.
+    Openapi(OpenapiArgs),
+    /// Print how to enable dynamic shell completion (bash, zsh, fish, powershell, elvish).
     Completion {
-        /// Shell to generate completions for.
+        /// Shell to enable completion for.
         shell: clap_complete::Shell,
     },
     /// Upgrade golden to the latest release (Homebrew / installer-aware).
@@ -95,11 +102,11 @@ pub enum HistoryAction {
 #[derive(Debug, Args)]
 pub struct RunArgs {
     /// Collection files or directories to run. Empty = all discovered.
-    #[arg(value_name = "PATHS")]
+    #[arg(value_name = "PATHS", add = ArgValueCompleter::new(complete_paths))]
     pub paths: Vec<String>,
 
     /// Select/override the .env (name or path).
-    #[arg(short = 'e', long, value_name = "NAME|PATH")]
+    #[arg(short = 'e', long, value_name = "NAME|PATH", add = ArgValueCompleter::new(complete_envs))]
     pub env: Option<String>,
 
     /// Number of iterations.
@@ -127,8 +134,13 @@ pub struct RunArgs {
     pub timeout: Option<u64>,
 
     /// Include only requests/folders whose name matches this glob.
-    #[arg(short = 'f', long, value_name = "GLOB")]
+    #[arg(short = 'f', long, value_name = "GLOB", add = ArgValueCompleter::new(complete_filter))]
     pub filter: Option<String>,
+
+    /// Include only requests with these HTTP methods (repeatable, case-insensitive).
+    /// e.g. `-X GET` for a safe read-only sweep against staging/prod.
+    #[arg(short = 'X', long = "method", value_name = "METHOD")]
+    pub method: Vec<String>,
 
     /// Data file (JSON array of objects, or CSV) for a data-driven run: one row
     /// per iteration, overlaying the variables and feeding pm.iterationData.
@@ -139,26 +151,30 @@ pub struct RunArgs {
 #[derive(Debug, Args)]
 pub struct ListArgs {
     /// Restrict listing to these files/directories.
-    #[arg(value_name = "PATHS")]
+    #[arg(value_name = "PATHS", add = ArgValueCompleter::new(complete_paths))]
     pub paths: Vec<String>,
 
     /// Include only requests/folders whose name matches this glob.
-    #[arg(short = 'f', long, value_name = "GLOB")]
+    #[arg(short = 'f', long, value_name = "GLOB", add = ArgValueCompleter::new(complete_filter))]
     pub filter: Option<String>,
+
+    /// Include only requests with these HTTP methods (repeatable, case-insensitive).
+    #[arg(short = 'X', long = "method", value_name = "METHOD")]
+    pub method: Vec<String>,
 }
 
 #[derive(Debug, Args)]
 pub struct SendArgs {
     /// Collection name (info.name) or file path.
-    #[arg(value_name = "COLLECTION")]
+    #[arg(value_name = "COLLECTION", add = ArgValueCompleter::new(complete_collections))]
     pub collection: String,
 
     /// Request name to fire.
-    #[arg(value_name = "REQUEST")]
+    #[arg(value_name = "REQUEST", add = ArgValueCompleter::new(complete_requests))]
     pub request: String,
 
     /// Select/override the .env (name or path).
-    #[arg(short = 'e', long, value_name = "NAME|PATH")]
+    #[arg(short = 'e', long, value_name = "NAME|PATH", add = ArgValueCompleter::new(complete_envs))]
     pub env: Option<String>,
 
     /// Disable TLS verification for all hosts.
@@ -193,10 +209,10 @@ pub struct SendArgs {
 #[derive(Debug, Args)]
 pub struct CurlArgs {
     /// Collection file (path or discovered name).
-    #[arg(value_name = "COLLECTION")]
+    #[arg(value_name = "COLLECTION", add = ArgValueCompleter::new(complete_collections))]
     pub collection: String,
     /// Request name within the collection.
-    #[arg(value_name = "REQUEST")]
+    #[arg(value_name = "REQUEST", add = ArgValueCompleter::new(complete_requests))]
     pub request: String,
     /// Mask sensitive header values (Authorization/Cookie/X-API-Key/Bearer/Basic).
     #[arg(short = 'm', long)]
@@ -225,6 +241,25 @@ pub struct CurlArgs {
     /// Download to file (-O -J).
     #[arg(short = 'O', long = "download")]
     pub download: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct OpenapiArgs {
+    /// Collections to convert. Empty = all discovered.
+    #[arg(value_name = "PATHS", add = ArgValueCompleter::new(complete_paths))]
+    pub paths: Vec<String>,
+
+    /// Write the spec to a file (else stdout).
+    #[arg(short = 'o', long, value_name = "FILE")]
+    pub output: Option<String>,
+
+    /// API title (defaults to the first collection's name).
+    #[arg(long, value_name = "TITLE")]
+    pub title: Option<String>,
+
+    /// Server URL recorded in the spec (defaults to `{{baseUrl}}`).
+    #[arg(long, value_name = "URL")]
+    pub server: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

@@ -15,14 +15,31 @@ Two binaries, identical: **`golden`** + short alias **`gr`**. Bare `golden` (no 
 
 | Command | Purpose |
 |---------|---------|
-| `golden run [PATHS…]` | Run one/many collections (or a directory). Test scripts, iterations, reporters. → `run` skill |
-| `golden list [PATHS…]` | List discovered collections + their requests. |
+| `golden run [PATHS…]` | Run one/many collections (or a directory). Test scripts, iterations, reporters, `--filter` (name glob) + `-X/--method` (HTTP verb). → `run` skill |
+| `golden list [PATHS…]` | List discovered collections + their requests. Supports `--filter` + `-X/--method`. |
 | `golden send <COLLECTION> <REQUEST>` | Fire one request, print the response. → `send` skill |
 | `golden curl <COLLECTION> <REQUEST>` | Print the equivalent curl. → `send` skill |
 | `golden import <SOURCE>` | Import Postman/raw/folder/OpenAPI/curl. → `import` skill |
+| `golden openapi [PATHS…]` | Convert collections → an OpenAPI 3.0 spec (`-o file`, `--title`, `--server`). → `openapi` skill |
 | `golden init` | Create `collections/` and seed the sample. |
 | `golden history <list\|clear\|on\|off\|replay N>` | Persisted request history (`.golden/history.jsonl`). |
-| `golden completion <bash\|zsh\|fish\|powershell\|elvish>` | Print a completion script. |
+| `golden completion <bash\|zsh\|fish\|powershell\|elvish>` | Enable **dynamic** shell completion — tab-completes real collection / request / env names. |
+
+## Selecting what to run
+
+- One request: `golden send "<collection name>" "<request name>"`.
+- A group: `golden run collections/ --filter "<name glob>"` (e.g. `"*campaign*"`).
+- By HTTP verb: `golden run collections/ -X GET` (repeatable) — a **read-only sweep** safe against staging/prod; `--filter` + `--method` compose.
+- A whole collection / everything: pass a file path / the dir. `golden list` first to see names.
+
+## Shell completion (dynamic)
+
+`golden completion <shell>` prints the one line to add to the shell rc — it wires
+clap_complete's dynamic engine (`source <(COMPLETE=zsh golden)`, etc.). After that,
+`golden send <TAB>` lists collections, `golden send "<collection>" <TAB>` lists requests,
+`golden run --filter <TAB>` lists request + folder names (pick one to run it),
+`--env <TAB>` lists envs, `golden run <TAB>` lists collection paths. Run from a dir with
+`collections/`.
 
 ## Discovery
 

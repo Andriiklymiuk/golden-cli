@@ -15,6 +15,8 @@ Run collections headlessly — local or CI. What to run + how = read from repo (
 | One collection | `golden run collections/<name>.json` |
 | Pick an environment | `golden run collections/ --env <name\|path>` |
 | Only matching requests/folders | `golden run collections/ --filter '<glob>'` |
+| Only certain HTTP verbs | `golden run collections/ -X GET` (repeatable, case-insensitive) — composes with `--filter` |
+| Safe read-only sweep (no writes) | `golden run collections/ -X GET` — never fires POST/PUT/PATCH/DELETE; ideal against staging/prod |
 | Repeat N times | `golden run collections/ --iterations <N>` |
 | Data-driven (1 iteration per row) | `golden run collections/ --data <file.json\|csv>` — rows overlay vars + feed `pm.iterationData` |
 | Stop at first failure | `golden run collections/ --bail` |
