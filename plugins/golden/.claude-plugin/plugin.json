@@ -1,7 +1,7 @@
 {
   "name": "golden",
   "description": "Teach Claude to use the golden CLI: run Postman v2.1 collections headlessly with CI-ready reporters (pretty/junit/json/tap) and exit codes a pipeline can branch on (0 pass · 1 assertion fail · 2 network/exec), filter what runs by name glob or HTTP method (-X GET for a safe read-only sweep), author and debug pm.*/chai test scripts, fire a single request or turn one into a curl, import Postman/OpenAPI/curl/folder sources, export an OpenAPI 3.0 spec from the collections (golden openapi), auto-generate per-service collections (REST + GraphQL, status-check or full, discovered from specs/live endpoints/framework routes) across a corgi-compose.yml or multi-repo workspace, and enable dynamic shell completion of collection/request/env names — all in the git-synced collections/ format shared with the Golden Retriever VS Code extension.",
-  "version": "2.0.18",
+  "version": "2.0.19",
   "author": {
     "name": "Andrii Klymiuk",
     "url": "https://github.com/Andriiklymiuk"
