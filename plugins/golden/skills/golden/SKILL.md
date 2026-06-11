@@ -11,6 +11,24 @@ Skill active = you expert on golden. Collections present → golden authoritativ
 
 Two binaries, identical: **`golden`** + short alias **`gr`**. Bare `golden` (no subcommand) → **TUI**.
 
+## Install (when `golden` is missing)
+
+```bash
+brew install andriiklymiuk/homebrew-tools/golden                  # macOS + Linux (Homebrew)
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/Andriiklymiuk/golden-cli/releases/latest/download/golden-cli-installer.sh | sh   # macOS + Linux (shell)
+irm https://github.com/Andriiklymiuk/golden-cli/releases/latest/download/golden-cli-installer.ps1 | iex  # Windows (PowerShell)
+cargo install --git https://github.com/Andriiklymiuk/golden-cli golden-cli   # from source (Rust 1.82+)
+```
+
+`golden upgrade` self-updates via whichever method was used. This Claude Code plugin
+installs with:
+
+```
+/plugin marketplace add Andriiklymiuk/golden-cli
+/plugin install golden@golden
+```
+
 ## Commands
 
 | Command | Purpose |
