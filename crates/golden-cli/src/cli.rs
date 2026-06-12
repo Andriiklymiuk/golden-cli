@@ -292,6 +292,8 @@ pub enum ReporterKind {
     Junit,
     Json,
     Tap,
+    /// NDJSON stream: one event per line (collection/request/done), live.
+    JsonStream,
 }
 
 /// Output formats for `golden send` (a single request has no junit/tap shape).
@@ -470,6 +472,17 @@ mod tests {
                 assert_eq!(args.timeout, Some(5000));
                 assert_eq!(args.filter.as_deref(), Some("auth/*"));
                 assert_eq!(args.data.as_deref(), Some("rows.csv"));
+            }
+            _ => panic!("expected run"),
+        }
+    }
+
+    #[test]
+    fn parses_json_stream_reporter() {
+        let cli = Cli::try_parse_from(["golden", "run", "-r", "json-stream"]).unwrap();
+        match cli.command {
+            Some(Command::Run(args)) => {
+                assert_eq!(args.reporter, vec![ReporterKind::JsonStream]);
             }
             _ => panic!("expected run"),
         }

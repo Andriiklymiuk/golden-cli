@@ -2,6 +2,7 @@
 //! output format. The factory maps a ReporterKind to a boxed Reporter.
 
 pub mod json;
+pub mod json_stream;
 pub mod junit;
 pub mod pretty;
 pub mod tap;
@@ -28,6 +29,7 @@ pub fn reporter_for(kind: ReporterKind) -> Box<dyn Reporter> {
         ReporterKind::Junit => Box::new(junit::JunitReporter),
         ReporterKind::Json => Box::new(json::JsonReporter),
         ReporterKind::Tap => Box::new(tap::TapReporter),
+        ReporterKind::JsonStream => Box::new(json_stream::JsonStreamReporter),
     }
 }
 
@@ -52,6 +54,7 @@ mod tests {
             ReporterKind::Junit,
             ReporterKind::Json,
             ReporterKind::Tap,
+            ReporterKind::JsonStream,
         ] {
             let r = reporter_for(kind);
             assert_eq!(r.kind(), kind);

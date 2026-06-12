@@ -1004,7 +1004,7 @@ dependencies = [
 
 [[package]]
 name = "golden-cli"
-version = "2.0.26"
+version = "2.0.27"
 dependencies = [
  "arboard",
  "assert_cmd",

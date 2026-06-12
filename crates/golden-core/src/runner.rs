@@ -145,23 +145,70 @@ pub fn run_with_progress(
     cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     progress: Option<&mut dyn FnMut(usize)>,
 ) -> RunResult {
+    match progress {
+        Some(p) => {
+            let mut on_request =
+                |_rr: &RequestResult, _iteration: u32, completed: usize| p(completed);
+            run_inner(
+                coll,
+                scopes,
+                iterations,
+                cfg,
+                false,
+                &[],
+                cancel.as_deref(),
+                Some(&mut on_request),
+            )
+        }
+        None => run_inner(
+            coll,
+            scopes,
+            iterations,
+            cfg,
+            false,
+            &[],
+            cancel.as_deref(),
+            None,
+        ),
+    }
+}
+
+/// Per-request event callback: receives the finished `RequestResult`, the
+/// 1-based iteration index, and the cumulative completed-request count.
+pub type RequestEventHandler<'a> = &'a mut dyn FnMut(&RequestResult, u32, usize);
+
+/// As `run_with_cancel`, plus a per-request event callback invoked with the
+/// full `RequestResult`, the 1-based iteration index, and the cumulative
+/// completed-request count right after EACH request finishes — letting a
+/// consumer stream live results as the run progresses. `data`, as in
+/// `run_with_options`, drives data-driven runs.
+pub fn run_with_events(
+    coll: &Collection,
+    scopes: &VarScopes,
+    iterations: u32,
+    cfg: &HttpConfig,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    data: &[HashMap<String, String>],
+    on_request: Option<RequestEventHandler<'_>>,
+) -> RunResult {
     run_inner(
         coll,
         scopes,
         iterations,
         cfg,
         false,
-        &[],
+        data,
         cancel.as_deref(),
-        progress,
+        on_request,
     )
 }
 
 /// The shared run loop behind `run`/`run_with_bail`/`run_with_options`/
-/// `run_with_cancel`/`run_with_progress`. `cancel`, when present, is checked
-/// between requests so an in-flight run can stop cooperatively. `progress`, when
-/// present, is called with the cumulative completed-request count after each
-/// request finishes.
+/// `run_with_cancel`/`run_with_progress`/`run_with_events`. `cancel`, when
+/// present, is checked between requests so an in-flight run can stop
+/// cooperatively. `on_request`, when present, is called with the finished
+/// `RequestResult`, the 1-based iteration index, and the cumulative
+/// completed-request count after each request finishes.
 #[allow(clippy::too_many_arguments)]
 fn run_inner(
     coll: &Collection,
@@ -171,7 +218,7 @@ fn run_inner(
     bail: bool,
     data: &[HashMap<String, String>],
     cancel: Option<&std::sync::atomic::AtomicBool>,
-    mut progress: Option<&mut dyn FnMut(usize)>,
+    mut on_request: Option<RequestEventHandler<'_>>,
 ) -> RunResult {
     let engine = RquickJsEngine::new();
     let mut collection_result = CollectionResult {
@@ -247,8 +294,8 @@ fn run_inner(
                 cfg,
             );
             totals.requests += 1;
-            if let Some(p) = progress.as_deref_mut() {
-                p(totals.requests);
+            if let Some(cb) = on_request.as_deref_mut() {
+                cb(&rr, iter.index, totals.requests);
             }
             if rr.error.is_some() || rr.status.map(|s| s >= 400).unwrap_or(true) {
                 totals.failed_requests += 1;
@@ -1072,5 +1119,48 @@ mod tests {
         // one callback per request, with strictly increasing cumulative counts.
         assert_eq!(result.totals.requests, 3);
         assert_eq!(counts, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn run_with_events_reports_result_iteration_and_count_per_request() {
+        let server = MockServer::start();
+        for p in ["/a", "/b"] {
+            server.mock(|when, then| {
+                when.path(p);
+                then.status(200);
+            });
+        }
+        let json = format!(
+            r#"{{"info":{{"name":"C"}},"item":[
+              {{"name":"a","request":{{"method":"GET","url":"{b}/a"}}}},
+              {{"name":"b","request":{{"method":"GET","url":"{b}/b"}}}}]}}"#,
+            b = server.base_url()
+        );
+        let coll: Collection = serde_json::from_str(&json).unwrap();
+        let mut events: Vec<(String, Option<u16>, u32, usize)> = Vec::new();
+        let mut cb = |rr: &RequestResult, iteration: u32, completed: usize| {
+            events.push((rr.name.clone(), rr.status, iteration, completed));
+        };
+        let result = run_with_events(
+            &coll,
+            &VarScopes::default(),
+            2,
+            &HttpConfig::default(),
+            None,
+            &[],
+            Some(&mut cb),
+        );
+        // one event per request, carrying the full result, the 1-based
+        // iteration index, and the cumulative completed count.
+        assert_eq!(result.totals.requests, 4);
+        assert_eq!(
+            events,
+            vec![
+                ("a".to_string(), Some(200), 1, 1),
+                ("b".to_string(), Some(200), 1, 2),
+                ("a".to_string(), Some(200), 2, 3),
+                ("b".to_string(), Some(200), 2, 4),
+            ]
+        );
     }
 }

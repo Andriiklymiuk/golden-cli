@@ -3,20 +3,20 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io;
-use std::path::Path;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
 use golden_core::env::resolve;
 use golden_core::http::HttpConfig;
-use golden_core::result::{RunResult, Totals};
-use golden_core::runner::run_with_options;
+use golden_core::result::{RequestResult, RunResult, Totals};
+use golden_core::runner::{run_with_events, run_with_options, RequestEventHandler};
 
-use crate::cli::RunArgs;
+use crate::cli::{ReporterKind, RunArgs};
 use crate::discovery::{discover, env_paths, expand_paths};
 use crate::exit::{code_for_result, FATAL};
 use crate::filter::{prune_collection, Filter};
 use crate::load::{load, Loaded};
-use crate::reporter::{default_if_empty, reporter_for};
+use crate::reporter::{default_if_empty, json_stream, reporter_for};
 
 /// Execute the run command. Returns the process exit code.
 pub fn execute(args: &RunArgs, collections_override: &[String]) -> i32 {
@@ -69,6 +69,18 @@ pub fn execute(args: &RunArgs, collections_override: &[String]) -> i32 {
         None => Vec::new(),
     };
 
+    // json-stream owns the whole output stream (NDJSON), so it cannot be
+    // combined with other reporters writing to the same destination.
+    let kinds = default_if_empty(&args.reporter);
+    let streaming = kinds.contains(&ReporterKind::JsonStream);
+    if streaming && kinds.len() > 1 {
+        eprintln!("golden: --reporter json-stream cannot be combined with other reporters");
+        return FATAL;
+    }
+    if streaming {
+        return execute_stream(args, &files, &filter, &cfg, &data);
+    }
+
     let mut merged = RunResult::default();
     for file in &files {
         let loaded = match load(file) {
@@ -85,6 +97,7 @@ pub fn execute(args: &RunArgs, collections_override: &[String]) -> i32 {
             &cfg,
             args.env.as_deref(),
             &data,
+            None,
         );
         let bail_now =
             args.bail && (single.totals.failed_assertions > 0 || single.totals.failed_requests > 0);
@@ -102,6 +115,89 @@ pub fn execute(args: &RunArgs, collections_override: &[String]) -> i32 {
     code_for_result(&merged)
 }
 
+/// The `--reporter json-stream` run loop: NDJSON events (collection start,
+/// each request as it completes, one terminal `done` with the merged result)
+/// written to stdout — or to `--output` — flushed after every line so
+/// consumers see live progress. Exit codes match the json reporter.
+fn execute_stream(
+    args: &RunArgs,
+    files: &[PathBuf],
+    filter: &Filter,
+    cfg: &HttpConfig,
+    data: &[HashMap<String, String>],
+) -> i32 {
+    let mut out: Box<dyn Write> = match &args.output {
+        Some(path) => match File::create(path) {
+            Ok(f) => Box::new(f),
+            Err(e) => {
+                eprintln!("golden: cannot create output file '{path}': {e}");
+                return FATAL;
+            }
+        },
+        None => Box::new(io::stdout()),
+    };
+
+    let mut merged = RunResult::default();
+    for file in files {
+        let loaded = match load(file) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("golden: {e}");
+                return FATAL;
+            }
+        };
+        let coll_name = loaded.collection.info.name.clone();
+        if let Err(e) = write_line(&mut out, &json_stream::collection_line(&coll_name, file)) {
+            eprintln!("golden: failed to write report: {e}");
+            return FATAL;
+        }
+        let mut emit_err: Option<io::Error> = None;
+        let mut on_request = |rr: &RequestResult, iteration: u32, _completed: usize| {
+            if emit_err.is_some() {
+                return;
+            }
+            if let Err(e) = write_line(
+                &mut out,
+                &json_stream::request_line(&coll_name, iteration, rr),
+            ) {
+                emit_err = Some(e);
+            }
+        };
+        let single = run_one(
+            loaded,
+            filter,
+            args.iterations,
+            cfg,
+            args.env.as_deref(),
+            data,
+            Some(&mut on_request),
+        );
+        if let Some(e) = emit_err {
+            eprintln!("golden: failed to write report: {e}");
+            return FATAL;
+        }
+        let bail_now =
+            args.bail && (single.totals.failed_assertions > 0 || single.totals.failed_requests > 0);
+        accumulate_result(&mut merged, single);
+        if bail_now {
+            break;
+        }
+    }
+
+    if let Err(e) = write_line(&mut out, &json_stream::done_line(&merged)) {
+        eprintln!("golden: failed to write report: {e}");
+        return FATAL;
+    }
+
+    code_for_result(&merged)
+}
+
+/// Write one NDJSON line and flush, so consumers see it immediately.
+fn write_line(out: &mut dyn Write, line: &str) -> io::Result<()> {
+    writeln!(out, "{line}")?;
+    out.flush()
+}
+
 fn run_one(
     mut loaded: Loaded,
     filter: &Filter,
@@ -109,6 +205,7 @@ fn run_one(
     cfg: &HttpConfig,
     env_override: Option<&str>,
     data: &[HashMap<String, String>],
+    on_request: Option<RequestEventHandler<'_>>,
 ) -> RunResult {
     prune_collection(&mut loaded.collection, filter);
 
@@ -124,7 +221,18 @@ fn run_one(
         apply_env_override(&loaded.workspace, env_sel, &mut scopes);
     }
 
-    run_with_options(&loaded.collection, &scopes, iterations, cfg, false, data)
+    match on_request {
+        Some(cb) => run_with_events(
+            &loaded.collection,
+            &scopes,
+            iterations,
+            cfg,
+            None,
+            data,
+            Some(cb),
+        ),
+        None => run_with_options(&loaded.collection, &scopes, iterations, cfg, false, data),
+    }
 }
 
 /// Overlay a selected .env (path or name) onto the resolved scopes.
