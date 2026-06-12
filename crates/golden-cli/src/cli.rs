@@ -85,7 +85,11 @@ pub struct HistoryArgs {
 #[derive(Debug, Subcommand)]
 pub enum HistoryAction {
     /// List recorded entries (newest last).
-    List,
+    List {
+        /// Print the entries as one JSON array on stdout (machine-readable).
+        #[arg(long)]
+        json: bool,
+    },
     /// Delete all recorded entries.
     Clear,
     /// Disable recording.
@@ -543,7 +547,18 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Command::History(HistoryArgs {
-                action: HistoryAction::List
+                action: HistoryAction::List { json: false }
+            }))
+        ));
+    }
+
+    #[test]
+    fn parses_history_list_json_flag() {
+        let cli = Cli::try_parse_from(["golden", "history", "list", "--json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::History(HistoryArgs {
+                action: HistoryAction::List { json: true }
             }))
         ));
     }
