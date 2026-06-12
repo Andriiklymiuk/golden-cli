@@ -18,8 +18,21 @@ pub fn execute(action: &HistoryAction) -> i32 {
     };
 
     match action {
-        HistoryAction::List => match history::read_all(&ws) {
+        HistoryAction::List { json } => match history::read_all(&ws) {
             Ok(entries) => {
+                // --json: one JSON array on stdout (newest last, [] when empty).
+                if *json {
+                    return match serde_json::to_string_pretty(&entries) {
+                        Ok(s) => {
+                            println!("{s}");
+                            0
+                        }
+                        Err(e) => {
+                            eprintln!("golden: {e}");
+                            FATAL
+                        }
+                    };
+                }
                 if entries.is_empty() {
                     println!("(no history)");
                 }

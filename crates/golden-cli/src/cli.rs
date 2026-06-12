@@ -85,7 +85,11 @@ pub struct HistoryArgs {
 #[derive(Debug, Subcommand)]
 pub enum HistoryAction {
     /// List recorded entries (newest last).
-    List,
+    List {
+        /// Print the entries as one JSON array on stdout (machine-readable).
+        #[arg(long)]
+        json: bool,
+    },
     /// Delete all recorded entries.
     Clear,
     /// Disable recording.
@@ -197,6 +201,21 @@ pub struct SendArgs {
     #[arg(short = 'f', long)]
     pub force: bool,
 
+    /// Output format: pretty (human) or json (one machine-readable JSON object on stdout).
+    #[arg(
+        short = 'r',
+        long,
+        value_enum,
+        value_name = "FORMAT",
+        default_value = "pretty"
+    )]
+    pub reporter: SendReporterKind,
+
+    /// 1-based pick when several requests share the name (also accepts
+    /// folder-qualified names like "Folder/Sub/Request").
+    #[arg(long, value_name = "N", default_value_t = 1)]
+    pub index: usize,
+
     /// After the response, print Set-Cookie headers.
     #[arg(long)]
     pub cookies: bool,
@@ -214,6 +233,10 @@ pub struct CurlArgs {
     /// Request name within the collection.
     #[arg(value_name = "REQUEST", add = ArgValueCompleter::new(complete_requests))]
     pub request: String,
+    /// 1-based pick when several requests share the name (also accepts
+    /// folder-qualified names like "Folder/Sub/Request").
+    #[arg(long, value_name = "N", default_value_t = 1)]
+    pub index: usize,
     /// Mask sensitive header values (Authorization/Cookie/X-API-Key/Bearer/Basic).
     #[arg(short = 'm', long)]
     pub mask: bool,
@@ -269,6 +292,13 @@ pub enum ReporterKind {
     Junit,
     Json,
     Tap,
+}
+
+/// Output formats for `golden send` (a single request has no junit/tap shape).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SendReporterKind {
+    Pretty,
+    Json,
 }
 
 #[cfg(test)]
@@ -517,7 +547,18 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Command::History(HistoryArgs {
-                action: HistoryAction::List
+                action: HistoryAction::List { json: false }
+            }))
+        ));
+    }
+
+    #[test]
+    fn parses_history_list_json_flag() {
+        let cli = Cli::try_parse_from(["golden", "history", "list", "--json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::History(HistoryArgs {
+                action: HistoryAction::List { json: true }
             }))
         ));
     }
@@ -589,6 +630,60 @@ mod tests {
             }
             _ => panic!("expected send"),
         }
+    }
+
+    #[test]
+    fn parses_send_reporter_json_and_defaults_to_pretty() {
+        let cli = Cli::try_parse_from(["golden", "send", "Sample", "login", "--reporter", "json"])
+            .unwrap();
+        match cli.command {
+            Some(Command::Send(args)) => assert_eq!(args.reporter, SendReporterKind::Json),
+            _ => panic!("expected send"),
+        }
+        let cli = Cli::try_parse_from(["golden", "send", "Sample", "login", "-r", "json"]).unwrap();
+        match cli.command {
+            Some(Command::Send(args)) => assert_eq!(args.reporter, SendReporterKind::Json),
+            _ => panic!("expected send"),
+        }
+        let cli = Cli::try_parse_from(["golden", "send", "Sample", "login"]).unwrap();
+        match cli.command {
+            Some(Command::Send(args)) => assert_eq!(args.reporter, SendReporterKind::Pretty),
+            _ => panic!("expected send"),
+        }
+    }
+
+    #[test]
+    fn parses_send_and_curl_index_defaulting_to_1() {
+        let cli =
+            Cli::try_parse_from(["golden", "send", "Sample", "status", "--index", "2"]).unwrap();
+        match cli.command {
+            Some(Command::Send(args)) => assert_eq!(args.index, 2),
+            _ => panic!("expected send"),
+        }
+        let cli = Cli::try_parse_from(["golden", "send", "Sample", "status"]).unwrap();
+        match cli.command {
+            Some(Command::Send(args)) => assert_eq!(args.index, 1),
+            _ => panic!("expected send"),
+        }
+        let cli =
+            Cli::try_parse_from(["golden", "curl", "Sample", "status", "--index", "3"]).unwrap();
+        match cli.command {
+            Some(Command::Curl(args)) => assert_eq!(args.index, 3),
+            _ => panic!("expected curl"),
+        }
+        let cli = Cli::try_parse_from(["golden", "curl", "Sample", "status"]).unwrap();
+        match cli.command {
+            Some(Command::Curl(args)) => assert_eq!(args.index, 1),
+            _ => panic!("expected curl"),
+        }
+    }
+
+    #[test]
+    fn send_rejects_unknown_reporter() {
+        assert!(
+            Cli::try_parse_from(["golden", "send", "Sample", "login", "--reporter", "junit"])
+                .is_err()
+        );
     }
 
     #[test]

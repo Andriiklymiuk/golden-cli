@@ -8,7 +8,7 @@ use crate::discovery::{discover, env_paths};
 use crate::exit::FATAL;
 use crate::load::load;
 
-use super::send::find_request;
+use super::send::select_request;
 
 /// Execute the curl subcommand. Returns the process exit code.
 pub fn execute(args: &CurlArgs) -> i32 {
@@ -66,12 +66,12 @@ pub fn execute(args: &CurlArgs) -> i32 {
         }
     };
 
-    let Some(request) = find_request(&loaded.collection, &args.request) else {
-        eprintln!(
-            "golden: request '{}' not found in collection '{}'",
-            args.request, args.collection
-        );
-        return FATAL;
+    let request = match select_request(&loaded.collection, &args.request, args.index) {
+        Ok(m) => m.request,
+        Err(e) => {
+            eprintln!("golden: {e} in collection '{}'", args.collection);
+            return FATAL;
+        }
     };
 
     let scopes = resolve(
