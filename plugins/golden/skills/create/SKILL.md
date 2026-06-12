@@ -48,7 +48,7 @@ Ensure `<service>/collections/` exists (single service → `collections/` in cwd
    - Ruby/PHP — Rails routes, Laravel routes.
    Build a request per route (method + path). Found nothing → fall back to a status check for that service.
 
-**Bodies + tests.** Write methods → scaffold a body from the spec schema / DTO, else a `{{var}}` placeholder. Tests: REST asserts status < 400 (or the documented code); GraphQL asserts `errors` absent and `data` present; content-type when known. Chain obvious vars (login token → `{{token}}`) when discoverable.
+**Bodies + tests.** Write methods → scaffold a body from the spec schema / DTO, else a `{{var}}` placeholder. **GraphQL bodies MUST use `"mode": "graphql"` with `body.graphql.query` (string) + `body.graphql.variables` (object)** — never `mode: raw` with a JSON `{"query": …}` string; raw GraphQL bodies don't render in the extension's GraphQL editor. Tests: REST asserts status < 400 (or the documented code); GraphQL asserts `errors` absent and `data` present; content-type when known. Chain obvious vars (login token → `{{token}}`) when discoverable.
 
 ## Phase 3 — Report + run-all
 
