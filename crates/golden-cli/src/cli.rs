@@ -197,6 +197,16 @@ pub struct SendArgs {
     #[arg(short = 'f', long)]
     pub force: bool,
 
+    /// Output format: pretty (human) or json (one machine-readable JSON object on stdout).
+    #[arg(
+        short = 'r',
+        long,
+        value_enum,
+        value_name = "FORMAT",
+        default_value = "pretty"
+    )]
+    pub reporter: SendReporterKind,
+
     /// After the response, print Set-Cookie headers.
     #[arg(long)]
     pub cookies: bool,
@@ -269,6 +279,13 @@ pub enum ReporterKind {
     Junit,
     Json,
     Tap,
+}
+
+/// Output formats for `golden send` (a single request has no junit/tap shape).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SendReporterKind {
+    Pretty,
+    Json,
 }
 
 #[cfg(test)]
@@ -589,6 +606,34 @@ mod tests {
             }
             _ => panic!("expected send"),
         }
+    }
+
+    #[test]
+    fn parses_send_reporter_json_and_defaults_to_pretty() {
+        let cli = Cli::try_parse_from(["golden", "send", "Sample", "login", "--reporter", "json"])
+            .unwrap();
+        match cli.command {
+            Some(Command::Send(args)) => assert_eq!(args.reporter, SendReporterKind::Json),
+            _ => panic!("expected send"),
+        }
+        let cli = Cli::try_parse_from(["golden", "send", "Sample", "login", "-r", "json"]).unwrap();
+        match cli.command {
+            Some(Command::Send(args)) => assert_eq!(args.reporter, SendReporterKind::Json),
+            _ => panic!("expected send"),
+        }
+        let cli = Cli::try_parse_from(["golden", "send", "Sample", "login"]).unwrap();
+        match cli.command {
+            Some(Command::Send(args)) => assert_eq!(args.reporter, SendReporterKind::Pretty),
+            _ => panic!("expected send"),
+        }
+    }
+
+    #[test]
+    fn send_rejects_unknown_reporter() {
+        assert!(
+            Cli::try_parse_from(["golden", "send", "Sample", "login", "--reporter", "junit"])
+                .is_err()
+        );
     }
 
     #[test]
