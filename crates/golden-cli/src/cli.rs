@@ -207,6 +207,11 @@ pub struct SendArgs {
     )]
     pub reporter: SendReporterKind,
 
+    /// 1-based pick when several requests share the name (also accepts
+    /// folder-qualified names like "Folder/Sub/Request").
+    #[arg(long, value_name = "N", default_value_t = 1)]
+    pub index: usize,
+
     /// After the response, print Set-Cookie headers.
     #[arg(long)]
     pub cookies: bool,
@@ -224,6 +229,10 @@ pub struct CurlArgs {
     /// Request name within the collection.
     #[arg(value_name = "REQUEST", add = ArgValueCompleter::new(complete_requests))]
     pub request: String,
+    /// 1-based pick when several requests share the name (also accepts
+    /// folder-qualified names like "Folder/Sub/Request").
+    #[arg(long, value_name = "N", default_value_t = 1)]
+    pub index: usize,
     /// Mask sensitive header values (Authorization/Cookie/X-API-Key/Bearer/Basic).
     #[arg(short = 'm', long)]
     pub mask: bool,

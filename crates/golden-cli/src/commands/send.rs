@@ -27,18 +27,24 @@ pub struct RequestMatch<'a> {
     pub request: &'a Request,
 }
 
-/// Find every request matching `name`, in depth-first order.
+/// Find every request matching `name`, in depth-first order. A plain name
+/// matches request items anywhere in the tree. When nothing matches and the
+/// name contains '/', it is retried as folder-qualified
+/// ("Folder/Sub/Request"): the last segment is the request name and the
+/// preceding segments must equal its ancestor folder names from the root.
+/// Plain matches win, so request names that themselves contain '/' keep working.
 pub fn find_requests<'a>(collection: &'a Collection, name: &str) -> Vec<RequestMatch<'a>> {
     fn walk<'a>(
         items: &'a [Item],
         prefix: &mut Vec<usize>,
-        name: &str,
+        folders: &mut Vec<String>,
+        matches: &dyn Fn(&Item, &[String]) -> bool,
         out: &mut Vec<RequestMatch<'a>>,
     ) {
         for (idx, item) in items.iter().enumerate() {
             prefix.push(idx);
             if let Some(request) = &item.request {
-                if item.name == name {
+                if matches(item, folders) {
                     out.push(RequestMatch {
                         path: prefix.clone(),
                         name: item.name.clone(),
@@ -47,14 +53,57 @@ pub fn find_requests<'a>(collection: &'a Collection, name: &str) -> Vec<RequestM
                 }
             }
             if let Some(children) = &item.item {
-                walk(children, prefix, name, out);
+                folders.push(item.name.clone());
+                walk(children, prefix, folders, matches, out);
+                folders.pop();
             }
             prefix.pop();
         }
     }
+
     let mut out = Vec::new();
-    walk(&collection.item, &mut Vec::new(), name, &mut out);
+    walk(
+        &collection.item,
+        &mut Vec::new(),
+        &mut Vec::new(),
+        &|item, _| item.name == name,
+        &mut out,
+    );
+    if out.is_empty() && name.contains('/') {
+        let segments: Vec<&str> = name.split('/').collect();
+        let (leaf, dirs) = segments.split_last().expect("split on non-empty name");
+        walk(
+            &collection.item,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &|item, folders| {
+                item.name == *leaf
+                    && folders.len() == dirs.len()
+                    && folders.iter().zip(dirs.iter()).all(|(f, d)| f == d)
+            },
+            &mut out,
+        );
+    }
     out
+}
+
+/// Select the `index`-th (1-based) request matching `name` in the collection.
+pub fn select_request<'a>(
+    collection: &'a Collection,
+    name: &str,
+    index: usize,
+) -> Result<RequestMatch<'a>, String> {
+    let mut matches = find_requests(collection, name);
+    if matches.is_empty() {
+        return Err(format!("request '{name}' not found"));
+    }
+    if index == 0 || index > matches.len() {
+        return Err(format!(
+            "--index {index} out of range: {} request(s) named '{name}'",
+            matches.len()
+        ));
+    }
+    Ok(matches.swap_remove(index - 1))
 }
 
 /// Depth-first search for a request by its item name (first match).
