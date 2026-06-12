@@ -17,11 +17,86 @@ pub fn disabled_flag_path(workspace: &Path) -> PathBuf {
     workspace.join(".golden").join("history.disabled")
 }
 
-/// Mask sensitive header values in-place (reuses curl::is_sensitive_header / mask_value).
+/// Create `.golden/` and make its runtime files self-ignoring for git (the
+/// cargo `target/` pattern): a `.gitignore` is dropped inside on first use so
+/// history never pollutes the host repo. Only runtime files are ignored —
+/// collections stored in `.golden/` stay committable. An existing `.gitignore`
+/// is left untouched.
+fn ensure_dir(dir: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dir)?;
+    let gitignore = dir.join(".gitignore");
+    if !gitignore.exists() {
+        fs::write(
+            &gitignore,
+            "# Runtime files written by the golden CLI — not meant to be committed.\nhistory.jsonl\nhistory.disabled\n",
+        )?;
+    }
+    Ok(())
+}
+
+/// Restrict the history file to the current user (0600) — it can contain
+/// request data even with masking on. Best-effort; no-op on non-unix.
+fn restrict_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
+/// JSON body keys whose values are masked at rest (case-insensitive substring
+/// match on the key). Replay of these fields is already impossible to do
+/// safely, so storing them in plaintext only adds risk.
+const SENSITIVE_BODY_KEYS: &[&str] = &[
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "authorization",
+    "credential",
+    "private_key",
+];
+
+fn key_is_sensitive(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    SENSITIVE_BODY_KEYS.iter().any(|s| lower.contains(s))
+}
+
+fn mask_json_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                if key_is_sensitive(k) && (v.is_string() || v.is_number()) {
+                    *v = serde_json::Value::String("***".into());
+                } else {
+                    mask_json_value(v);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(mask_json_value),
+        _ => {}
+    }
+}
+
+/// Mask sensitive values in-place: header values (reuses
+/// curl::is_sensitive_header / mask_value) and, for JSON request bodies,
+/// values of password/token/secret-style keys at any nesting depth.
 pub fn mask_entry(mut entry: HistoryEntry) -> HistoryEntry {
     for (k, v) in entry.request_headers.iter_mut() {
         if crate::curl::is_sensitive_header(k) || crate::curl::mask_value(v) == "***" {
             *v = "***".to_string();
+        }
+    }
+    if let Some(body) = entry.request_body.as_ref() {
+        if let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(body) {
+            mask_json_value(&mut parsed);
+            entry.request_body = Some(parsed.to_string());
         }
     }
     entry
@@ -41,7 +116,7 @@ pub fn set_enabled(workspace: &Path, enabled: bool) -> std::io::Result<()> {
         }
     } else {
         if let Some(dir) = flag.parent() {
-            fs::create_dir_all(dir)?;
+            ensure_dir(dir)?;
         }
         fs::write(&flag, b"")?;
     }
@@ -72,7 +147,7 @@ pub fn append(workspace: &Path, entry: HistoryEntry, mask: bool) -> std::io::Res
     let entry = if mask { mask_entry(entry) } else { entry };
     let path = history_path(workspace);
     if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
+        ensure_dir(dir)?;
     }
 
     let mut all = read_all(workspace)?;
@@ -93,6 +168,7 @@ pub fn append(workspace: &Path, entry: HistoryEntry, mask: bool) -> std::io::Res
             .open(&path)?;
         writeln!(f, "{}", serde_json::to_string(all.last().unwrap()).unwrap())?;
     }
+    restrict_permissions(&path);
     Ok(())
 }
 
@@ -366,5 +442,67 @@ mod tests {
             ("Authorization".to_string(), "Bearer abc123".to_string())
         );
         assert_eq!(e.request_body.as_deref(), Some("{\"t\":\"abc123\"}"));
+    }
+
+    #[test]
+    fn append_drops_self_ignoring_gitignore_in_golden_dir() {
+        let ws = tempdir().unwrap();
+        append(ws.path(), entry("https://api.test/a"), true).unwrap();
+        let gitignore = ws.path().join(".golden").join(".gitignore");
+        let content = std::fs::read_to_string(&gitignore).unwrap();
+        assert!(content.contains("history.jsonl"));
+        assert!(content.contains("history.disabled"));
+    }
+
+    #[test]
+    fn existing_golden_gitignore_is_left_untouched() {
+        let ws = tempdir().unwrap();
+        let dir = ws.path().join(".golden");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".gitignore"), "custom\n").unwrap();
+        append(ws.path(), entry("https://api.test/a"), true).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".gitignore")).unwrap(),
+            "custom\n"
+        );
+    }
+
+    #[test]
+    fn masking_redacts_sensitive_json_body_fields_at_any_depth() {
+        let mut e = entry("https://api.test/login");
+        e.request_body = Some(
+            r#"{"username":"bob","password":"hunter2","nested":{"api_key":"k-123","note":"keep"},"items":[{"token":42}]}"#
+                .into(),
+        );
+        let masked = mask_entry(e);
+        let body: serde_json::Value =
+            serde_json::from_str(masked.request_body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["username"], "bob");
+        assert_eq!(body["password"], "***");
+        assert_eq!(body["nested"]["api_key"], "***");
+        assert_eq!(body["nested"]["note"], "keep");
+        assert_eq!(body["items"][0]["token"], "***");
+    }
+
+    #[test]
+    fn non_json_bodies_are_stored_verbatim() {
+        let mut e = entry("https://api.test/x");
+        e.request_body = Some("password=hunter2&x=1".into());
+        let masked = mask_entry(e);
+        // Form-encoded bodies are not parsed; header masking still applies.
+        assert_eq!(masked.request_body.as_deref(), Some("password=hunter2&x=1"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn history_file_is_user_only_after_append() {
+        use std::os::unix::fs::PermissionsExt;
+        let ws = tempdir().unwrap();
+        append(ws.path(), entry("https://api.test/a"), true).unwrap();
+        let mode = std::fs::metadata(history_path(ws.path()))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }
