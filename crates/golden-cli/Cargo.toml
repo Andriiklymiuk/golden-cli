@@ -1,6 +1,6 @@
 [package]
 name = "golden-cli"
-version = "2.0.25"
+version = "2.0.26"
 edition.workspace = true
 license.workspace = true
 description = "Run and test Postman v2.1 collections from the terminal — the CLI for Golden Retriever."
