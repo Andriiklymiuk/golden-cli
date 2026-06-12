@@ -313,3 +313,40 @@ fn send_substitutes_variables_from_collection() {
         .success()
         .stdout(predicate::str::contains("200"));
 }
+
+#[test]
+fn send_accepts_direct_file_path_outside_collection_roots() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET).path("/health");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body("{\"ok\":true}");
+    });
+    // Collection lives in a temp dir with NO collections/ root anywhere —
+    // exactly how the VS Code extension sends unsaved panel edits.
+    let outside = tempdir().unwrap();
+    let coll = format!(
+        r#"{{"info":{{"name":"Tmp"}},"item":[
+            {{"name":"health","request":{{"method":"GET","url":"{}/health"}}}}
+        ]}}"#,
+        server.base_url()
+    );
+    write(outside.path(), "one-shot.json", &coll);
+    let file = outside.path().join("one-shot.json");
+
+    let cwd = tempdir().unwrap(); // empty cwd: discovery would find nothing
+    Command::cargo_bin("golden")
+        .unwrap()
+        .current_dir(cwd.path())
+        .args([
+            "send",
+            file.to_str().unwrap(),
+            "health",
+            "--reporter",
+            "json",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"status\": 200"));
+}

@@ -2,6 +2,7 @@
 //! collections, send it via golden_core, and print the response.
 
 use std::io::{self, Write};
+use std::path::Path;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
@@ -137,25 +138,39 @@ pub fn execute(args: &SendArgs, collections_override: &[String]) -> i32 {
         }
     };
 
-    let files = discover(&workspace, collections_override, env_paths());
-    if files.is_empty() {
-        eprintln!("golden: no collections found");
-        return FATAL;
-    }
-
-    // Find the target collection.
+    // A direct path to a collection file (help: "name or file path") skips
+    // root discovery entirely — the VS Code extension sends temp collections
+    // from outside any collections root this way.
+    let direct = Path::new(&args.collection);
     let mut target: Option<Loaded> = None;
-    for file in &files {
-        match load(file) {
-            Ok(l) => {
-                if collection_matches(&l, &args.collection) {
-                    target = Some(l);
-                    break;
-                }
-            }
+    if direct.is_file() {
+        match load(direct) {
+            Ok(l) => target = Some(l),
             Err(e) => {
                 eprintln!("golden: {e}");
                 return FATAL;
+            }
+        }
+    } else {
+        let files = discover(&workspace, collections_override, env_paths());
+        if files.is_empty() {
+            eprintln!("golden: no collections found");
+            return FATAL;
+        }
+
+        // Find the target collection.
+        for file in &files {
+            match load(file) {
+                Ok(l) => {
+                    if collection_matches(&l, &args.collection) {
+                        target = Some(l);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("golden: {e}");
+                    return FATAL;
+                }
             }
         }
     }
