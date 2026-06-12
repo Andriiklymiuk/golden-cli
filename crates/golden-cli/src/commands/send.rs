@@ -21,6 +21,7 @@ use crate::load::{load, Loaded};
 /// One request located in a collection: the index path into the item tree
 /// (consumable by `golden_core::runner::run_single`), the item name, and the
 /// request itself.
+#[derive(Debug)]
 pub struct RequestMatch<'a> {
     pub path: Vec<usize>,
     pub name: String,
@@ -164,15 +165,13 @@ pub fn execute(args: &SendArgs, collections_override: &[String]) -> i32 {
         return FATAL;
     };
 
-    let matches = find_requests(&loaded.collection, &args.request);
-    if matches.is_empty() {
-        eprintln!(
-            "golden: request '{}' not found in collection '{}'",
-            args.request, args.collection
-        );
-        return FATAL;
-    }
-    let found = &matches[0];
+    let found = match select_request(&loaded.collection, &args.request, args.index) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("golden: {e} in collection '{}'", args.collection);
+            return FATAL;
+        }
+    };
     let request = found.request;
 
     let mut scopes = resolve(
@@ -191,7 +190,7 @@ pub fn execute(args: &SendArgs, collections_override: &[String]) -> i32 {
 
     // --reporter json: machine output, one JSON object on stdout, nothing else.
     if args.reporter == SendReporterKind::Json {
-        return execute_json(&loaded, found, &scopes, &cfg, &workspace);
+        return execute_json(&loaded, &found, &scopes, &cfg, &workspace);
     }
 
     // --output: stream response body to a file instead of printing to stdout.
@@ -556,6 +555,87 @@ mod tests {
     fn missing_request_returns_none() {
         let c = coll();
         assert!(find_request(&c, "nope").is_none());
+    }
+
+    /// Two folders each holding a request named "status", plus a top-level
+    /// duplicate, and a request whose literal name contains '/'.
+    fn dup_coll() -> Collection {
+        let json = r#"{
+          "info":{"name":"Dups"},
+          "item":[
+            {"name":"status","request":{"method":"GET","url":"https://x/top"}},
+            {"name":"Users","item":[
+              {"name":"status","request":{"method":"POST","url":"https://x/users/status"}},
+              {"name":"Admin","item":[
+                {"name":"status","request":{"method":"PUT","url":"https://x/admin/status"}}
+              ]}
+            ]},
+            {"name":"a/b","request":{"method":"DELETE","url":"https://x/literal"}}
+          ]
+        }"#;
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn find_requests_returns_all_duplicates_in_depth_first_order() {
+        let c = dup_coll();
+        let all = find_requests(&c, "status");
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].path, vec![0]); // top-level
+        assert_eq!(all[1].path, vec![1, 0]); // Users/status
+        assert_eq!(all[2].path, vec![1, 1, 0]); // Users/Admin/status
+    }
+
+    #[test]
+    fn select_request_picks_nth_match_one_based() {
+        let c = dup_coll();
+        assert_eq!(
+            select_request(&c, "status", 1).unwrap().request.method,
+            "GET"
+        );
+        assert_eq!(
+            select_request(&c, "status", 2).unwrap().request.method,
+            "POST"
+        );
+        assert_eq!(
+            select_request(&c, "status", 3).unwrap().request.method,
+            "PUT"
+        );
+    }
+
+    #[test]
+    fn select_request_rejects_out_of_range_index() {
+        let c = dup_coll();
+        let err = select_request(&c, "status", 4).unwrap_err();
+        assert!(err.contains("out of range"), "{err}");
+        assert!(err.contains("3 request(s)"), "{err}");
+        assert!(select_request(&c, "status", 0).is_err());
+        assert_eq!(
+            select_request(&c, "nope", 1).unwrap_err(),
+            "request 'nope' not found"
+        );
+    }
+
+    #[test]
+    fn folder_qualified_name_matches_exact_folder_path() {
+        let c = dup_coll();
+        let m = find_requests(&c, "Users/status");
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].request.method, "POST");
+        let m = find_requests(&c, "Users/Admin/status");
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].request.method, "PUT");
+        // Folder path must match from the root, not a suffix.
+        assert!(find_requests(&c, "Admin/status").is_empty());
+        assert!(find_requests(&c, "Nope/status").is_empty());
+    }
+
+    #[test]
+    fn literal_request_name_with_slash_wins_over_qualified_lookup() {
+        let c = dup_coll();
+        let m = find_requests(&c, "a/b");
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].request.method, "DELETE");
     }
 
     #[test]

@@ -187,6 +187,86 @@ fn send_reporter_json_success_without_tests_exits_zero() {
     assert!(v["tests"].as_array().unwrap().is_empty());
 }
 
+#[test]
+fn send_index_selects_nth_duplicate_and_folder_path_qualifies() {
+    let server = MockServer::start();
+    let first = server.mock(|when, then| {
+        when.method(GET).path("/first");
+        then.status(200).body("first");
+    });
+    let second = server.mock(|when, then| {
+        when.method(GET).path("/second");
+        then.status(200).body("second");
+    });
+    let ws = tempdir().unwrap();
+    let coll = format!(
+        r#"{{"info":{{"name":"Dups"}},"item":[
+            {{"name":"status","request":{{"method":"GET","url":"{b}/first"}}}},
+            {{"name":"Users","item":[
+              {{"name":"status","request":{{"method":"GET","url":"{b}/second"}}}}
+            ]}}
+        ]}}"#,
+        b = server.base_url()
+    );
+    write(ws.path(), "collections/dups.json", &coll);
+
+    // --index 2 fires the second duplicate.
+    Command::cargo_bin("golden")
+        .unwrap()
+        .current_dir(ws.path())
+        .args(["send", "Dups", "status", "--index", "2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("second"));
+    second.assert_hits(1);
+    first.assert_hits(0);
+
+    // Folder-qualified name addresses the nested one directly.
+    Command::cargo_bin("golden")
+        .unwrap()
+        .current_dir(ws.path())
+        .args(["send", "Dups", "Users/status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("second"));
+    second.assert_hits(2);
+
+    // Out-of-range index reports how many matches exist.
+    Command::cargo_bin("golden")
+        .unwrap()
+        .current_dir(ws.path())
+        .args(["send", "Dups", "status", "--index", "5"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--index 5 out of range"));
+}
+
+#[test]
+fn curl_index_selects_nth_duplicate() {
+    let ws = tempdir().unwrap();
+    let coll = r#"{"info":{"name":"Dups"},"item":[
+        {"name":"status","request":{"method":"GET","url":"https://x/first"}},
+        {"name":"status","request":{"method":"GET","url":"https://x/second"}}
+    ]}"#;
+    write(ws.path(), "collections/dups.json", coll);
+
+    Command::cargo_bin("golden")
+        .unwrap()
+        .current_dir(ws.path())
+        .args(["curl", "Dups", "status", "--index", "2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("https://x/second"));
+
+    Command::cargo_bin("golden")
+        .unwrap()
+        .current_dir(ws.path())
+        .args(["curl", "Dups", "status", "--index", "3"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("out of range"));
+}
+
 /// Minimal standard-alphabet base64 decoder for test assertions (no extra dep).
 fn base64_decode(s: &str) -> Vec<u8> {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

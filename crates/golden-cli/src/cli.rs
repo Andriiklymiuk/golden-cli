@@ -638,6 +638,32 @@ mod tests {
     }
 
     #[test]
+    fn parses_send_and_curl_index_defaulting_to_1() {
+        let cli =
+            Cli::try_parse_from(["golden", "send", "Sample", "status", "--index", "2"]).unwrap();
+        match cli.command {
+            Some(Command::Send(args)) => assert_eq!(args.index, 2),
+            _ => panic!("expected send"),
+        }
+        let cli = Cli::try_parse_from(["golden", "send", "Sample", "status"]).unwrap();
+        match cli.command {
+            Some(Command::Send(args)) => assert_eq!(args.index, 1),
+            _ => panic!("expected send"),
+        }
+        let cli =
+            Cli::try_parse_from(["golden", "curl", "Sample", "status", "--index", "3"]).unwrap();
+        match cli.command {
+            Some(Command::Curl(args)) => assert_eq!(args.index, 3),
+            _ => panic!("expected curl"),
+        }
+        let cli = Cli::try_parse_from(["golden", "curl", "Sample", "status"]).unwrap();
+        match cli.command {
+            Some(Command::Curl(args)) => assert_eq!(args.index, 1),
+            _ => panic!("expected curl"),
+        }
+    }
+
+    #[test]
     fn send_rejects_unknown_reporter() {
         assert!(
             Cli::try_parse_from(["golden", "send", "Sample", "login", "--reporter", "junit"])
