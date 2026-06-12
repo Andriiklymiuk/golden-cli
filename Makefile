@@ -50,9 +50,13 @@ incrementVersionMajor:
 # Force the Claude plugin's version (plugins/golden/.claude-plugin/plugin.json) to
 # match the current CLI VERSION. Called by every incrementVersion* target via a
 # sub-make, so VERSION reflects the just-applied bump (not the pre-bump value).
-# Only the top-level "version" key is touched.
+# Only the top-level "version" key is touched. Also refreshes Cargo.lock's
+# workspace entries — cargo only rewrites the lock on the next build, so without
+# this the bump commit would ship a stale lock and the lock change would leak
+# into a later unrelated commit.
 syncPluginVersion:
 	sed -i "" 's/"version": "[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"/"version": "$(VERSION)"/' $(PLUGIN_MANIFEST)
+	cargo update --workspace --quiet
 	@echo "golden CLI + plugin -> $(VERSION)"
 
 # Copy the embedded sample asset onto the on-disk copy so the two never drift.
