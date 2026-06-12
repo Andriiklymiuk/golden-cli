@@ -288,12 +288,12 @@ fn param(name: &str, location: &str, required: bool) -> Value {
 fn request_body(request: &Request) -> Option<Value> {
     let body = request.body.as_ref()?;
     let example = if body.mode == "graphql" {
-        let query = body
-            .graphql
-            .as_ref()
-            .map(|g| g.query.clone())
-            .unwrap_or_default();
-        json!({ "query": query })
+        let g = body.graphql.as_ref();
+        let query = g.map(|g| g.query.clone()).unwrap_or_default();
+        match g.and_then(|g| g.variables.clone()) {
+            Some(vars) => json!({ "query": query, "variables": vars }),
+            None => json!({ "query": query }),
+        }
     } else {
         match body.raw.as_ref()? {
             Value::String(s) => {
