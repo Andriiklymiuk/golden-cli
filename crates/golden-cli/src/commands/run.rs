@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use golden_core::env::resolve;
 use golden_core::http::HttpConfig;
 use golden_core::result::{RequestResult, RunResult, Totals};
-use golden_core::runner::{run_with_events, run_with_options};
+use golden_core::runner::{run_with_events, run_with_options, RequestEventHandler};
 
 use crate::cli::{ReporterKind, RunArgs};
 use crate::discovery::{discover, env_paths, expand_paths};
@@ -205,7 +205,7 @@ fn run_one(
     cfg: &HttpConfig,
     env_override: Option<&str>,
     data: &[HashMap<String, String>],
-    on_request: Option<&mut dyn FnMut(&RequestResult, u32, usize)>,
+    on_request: Option<RequestEventHandler<'_>>,
 ) -> RunResult {
     prune_collection(&mut loaded.collection, filter);
 

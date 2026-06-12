@@ -173,6 +173,10 @@ pub fn run_with_progress(
     }
 }
 
+/// Per-request event callback: receives the finished `RequestResult`, the
+/// 1-based iteration index, and the cumulative completed-request count.
+pub type RequestEventHandler<'a> = &'a mut dyn FnMut(&RequestResult, u32, usize);
+
 /// As `run_with_cancel`, plus a per-request event callback invoked with the
 /// full `RequestResult`, the 1-based iteration index, and the cumulative
 /// completed-request count right after EACH request finishes — letting a
@@ -185,7 +189,7 @@ pub fn run_with_events(
     cfg: &HttpConfig,
     cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     data: &[HashMap<String, String>],
-    on_request: Option<&mut dyn FnMut(&RequestResult, u32, usize)>,
+    on_request: Option<RequestEventHandler<'_>>,
 ) -> RunResult {
     run_inner(
         coll,
@@ -214,7 +218,7 @@ fn run_inner(
     bail: bool,
     data: &[HashMap<String, String>],
     cancel: Option<&std::sync::atomic::AtomicBool>,
-    mut on_request: Option<&mut dyn FnMut(&RequestResult, u32, usize)>,
+    mut on_request: Option<RequestEventHandler<'_>>,
 ) -> RunResult {
     let engine = RquickJsEngine::new();
     let mut collection_result = CollectionResult {
