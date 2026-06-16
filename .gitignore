@@ -7,3 +7,5 @@
 # SonarScanner local output
 .scannerwork/
 lcov.info
+
+.DS_Store
