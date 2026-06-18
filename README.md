@@ -109,6 +109,12 @@ golden is non-interactive and speaks JSON, so an agent (or any script) can run i
 /plugin install golden@golden
 ```
 
+Using another agent (Cursor, Codex, Copilot, …)? Install the skills via [skills.sh](https://www.skills.sh):
+
+```text
+npx skills add Andriiklymiuk/golden-cli
+```
+
 | Skill · command             | Ask Claude…                                                                     |
 | --------------------------- | ------------------------------------------------------------------------------- |
 | `create` · `/golden-create` | _"scaffold collections for this corgi stack"_ · _"status check per service"_    |
